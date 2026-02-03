@@ -77,8 +77,11 @@ class Withdraw(commands.Cog):
                 ephemeral=True
             )
         else:
+            explorer_url = f"https://miners-world-coin-mwc.github.io/explorer/#/transaction/{txid}"
+
             await interaction.response.send_message(
-                f"{interaction.user.mention} ✅ Withdrew **{amount} MWC** <:MWC:1451276940236423189>.\nTransaction ID: `{txid}`",
+                f"{interaction.user.mention} ✅ Withdrew **{amount} MWC** <:MWC:1451276940236423189>.\n"
+                f"Transaction ID: [{txid}]({explorer_url})",
                 ephemeral=True
             )
 
