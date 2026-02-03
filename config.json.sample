@@ -27,22 +27,21 @@
             "use_min_received": true
         },
         "command_channels": {
-            "help": [list of channel names for this command],
-            "deposit": [list of channel names for this command],
-            "withdraw": [list of channel names for this command],
-            "balance": [list of channel names for this command],
-            "uptime": [list of channel names for this command],
-            "invite": [list of channel names for this command],
-            "stats": [list of channel names for this command],
-            "mninfo": [list of channel names for this command],
-            "tip": [list of channel names for this command],
-            "soak": [list of channel names for this command],
-            "soak_info": [list of channel names for this command],
-            "checksoak": [list of channel names for this command
+            "help": ["💰・tipbot", "general"],
+            "deposit": ["💰・tipbot"],
+            "withdraw": ["💰・tipbot"],
+            "balance": ["💰・tipbot"],
+            "uptime": ["💰・tipbot"],
+            "invite": ["💰・tipbot"],
+            "stats": ["💰・tipbot"],
+            "mninfo": ["💰・tipbot"],
+            "tip": ["💰・tipbot"],
+            "soak": ["💰・tipbot"],
+            "soak_info": ["💰・tipbot"],
+            "checksoak": ["💰・tipbot"]
         },
-        "txfee": 0,
+        "txfee": 0.01,
         "owners": ["put your discord id here"],
-        "prefix": "!",
-        "description": "Northern Bot"
+        "description": "MinersWorldCoin Bot"
     }
 ]}

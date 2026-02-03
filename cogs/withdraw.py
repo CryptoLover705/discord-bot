@@ -1,61 +1,86 @@
-import discord, json, requests, pymysql.cursors
+import math
+import discord
+from discord import app_commands
 from discord.ext import commands
 from utils import rpc_module, mysql_module, parsing
-import math
 
 rpc = rpc_module.Rpc()
 mysql = mysql_module.Mysql()
 
+class Withdraw(commands.Cog):
+    """Slash command for withdrawing coins"""
 
-class Withdraw:
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.command(pass_context=True)
-    async def withdraw(self, ctx, address: str, amount: float):
-        """Withdraw coins from your account to any Northern address"""
-        snowflake = ctx.message.author.id    
-        channel_name = ctx.message.channel.name
-        allowed_channels = parsing.parse_json('config.json')['command_channels'][ctx.command.name]
+    @app_commands.command(name="withdraw", description="Withdraw MWC to any address")
+    async def withdraw(self, interaction: discord.Interaction, address: str, amount: float):
+        snowflake = interaction.user.id
+        channel_name = interaction.channel.name
+        allowed_channels = parsing.parse_json('config.json')['command_channels']['withdraw']
+
         if channel_name not in allowed_channels:
+            await interaction.response.send_message(
+                "You cannot use this command in this channel!", ephemeral=True
+            )
             return
 
         if amount <= 0.0:
-            await self.bot.say("{} **:warning: You cannot withdraw <= 0! :warning:**".format(ctx.message.author.mention))
+            await interaction.response.send_message(
+                f"{interaction.user.mention} ⚠️ You cannot withdraw <= 0!", ephemeral=True
+            )
             return
 
         abs_amount = abs(amount)
         if math.log10(abs_amount) > 8:
-            await self.bot.say(":warning: **Invalid amount!** :warning:")
+            await interaction.response.send_message(
+                "⚠️ Invalid amount!", ephemeral=True
+            )
             return
 
         mysql.check_for_user(snowflake)
 
+        # Validate address
         conf = rpc.validateaddress(address)
         if not conf["isvalid"]:
-            await self.bot.say("{} **:warning: Invalid address! :warning:**".format(ctx.message.author.mention))
+            await interaction.response.send_message(
+                f"{interaction.user.mention} ⚠️ Invalid address!", ephemeral=True
+            )
             return
 
-        ownedByBot = False
+        # Prevent withdrawing to bot-owned addresses
+        owned_by_bot = False
         for address_info in rpc.listreceivedbyaddess(0, True):
             if address_info["address"] == address:
-                ownedByBot = True
+                owned_by_bot = True
                 break
-
-        if ownedByBot:
-            await self.bot.say("{} **:warning: You cannot withdraw to an address owned by this bot! :warning:** Please use tip instead!".format(ctx.message.author.mention))
+        if owned_by_bot:
+            await interaction.response.send_message(
+                f"{interaction.user.mention} ⚠️ You cannot withdraw to an address owned by this bot! Use `/tip` instead.",
+                ephemeral=True
+            )
             return
 
+        # Check balance
         balance = mysql.get_balance(snowflake, check_update=True)
         if float(balance) < amount:
-            await self.bot.say("{} **:warning: You cannot withdraw more money than you have! :warning:**".format(ctx.message.author.mention))
+            await interaction.response.send_message(
+                f"{interaction.user.mention} ⚠️ You cannot withdraw more than your balance!", ephemeral=True
+            )
             return
 
+        # Execute withdrawal
         txid = mysql.create_withdrawal(snowflake, address, amount)
         if txid is None:
-            await self.bot.say("{} your withdraw failed despit having the necessary balance! Please contact the support team".format(ctx.message.author.mention))
+            await interaction.response.send_message(
+                f"{interaction.user.mention} Withdrawal failed despite having the necessary balance! Please contact support.",
+                ephemeral=True
+            )
         else:
-            await self.bot.say("{} **Withdrew {} NORT! <:nort:469787831137599488>**{} ".format(ctx.message.author.mention, str(amount), txid))
+            await interaction.response.send_message(
+                f"{interaction.user.mention} ✅ Withdrew **{amount} MWC** <:MWC:1451276940236423189>.\nTransaction ID: `{txid}`",
+                ephemeral=True
+            )
 
-def setup(bot):
-    bot.add_cog(Withdraw(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Withdraw(bot))

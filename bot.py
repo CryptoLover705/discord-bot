@@ -1,17 +1,61 @@
 import discord
 from discord.ext import commands
-from utils import output, parsing, checks, mysql_module, g
+from discord import app_commands
+
+from utils import output, parsing, mysql_module, g
 import os
 import traceback
 import database
-import pdb
 
-config = parsing.parse_json('config.json')
+# =========================
+# CONFIG
+# =========================
+config = parsing.parse_json("config.json")
 
+# =========================
+# INTENTS (REQUIRED)
+# =========================
+intents = discord.Intents.default()
+intents.guilds = True
+intents.members = False
+intents.messages = False  # not needed for slash commands
+
+# =========================
+# BOT INITIALIZATION
+# =========================
+class MinerBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix=None,  # slash commands only
+            description=config["description"],
+            intents=intents
+        )
+
+    async def setup_hook(self):
+        """Runs before the bot connects to Discord"""
+        output.info(f"Loading {len(g.startup_extensions)} extension(s)...")
+
+        for extension in g.startup_extensions:
+            try:
+                await self.load_extension(f"cogs.{extension}")
+                g.loaded_extensions.append(extension)
+            except Exception:
+                output.error(
+                    f"Failed to load extension {extension}\n{traceback.format_exc()}"
+                )
+
+        await self.tree.sync()
+        output.success(
+            f"Successfully loaded: {', '.join(g.loaded_extensions)}"
+        )
+        output.success("Slash commands synced successfully.")
+
+bot = MinerBot()
 Mysql = mysql_module.Mysql()
 
-bot = commands.Bot(command_prefix=config['prefix'], description=config["description"])
-
+# =========================
+# CLEAN LOG FILE
+# =========================
 try:
     os.remove("log.txt")
 except FileNotFoundError:
@@ -19,82 +63,63 @@ except FileNotFoundError:
 
 if "__pycache__" in g.startup_extensions:
     g.startup_extensions.remove("__pycache__")
-g.startup_extensions = [ext.replace('.py', '') for ext in g.startup_extensions]
+g.startup_extensions = [ext.replace(".py", "") for ext in g.startup_extensions]
 
+# =========================
+# EVENTS
+# =========================
 @bot.event
 async def on_ready():
-    output.info("Loading {} extension(s)...".format(len(g.startup_extensions)))
-
-    for extension in g.startup_extensions:
-        try:
-            bot.load_extension("cogs.{}".format(extension.replace(".py", "")))
-            g.loaded_extensions.append(extension)
-
-        except Exception as e:
-            exc = '{}: {}'.format(type(e).__name__, e)
-            output.error('Failed to load extension {}\n\t->{}'.format(extension, exc))
-    output.success('Successfully loaded the following extension(s): {}'.format(', '.join(g.loaded_extensions)))
-    output.info('You can now invite the bot to a server using the following link: https://discordapp.com/oauth2/authorize?client_id={}&scope=bot'.format(bot.user.id))
+    output.success(f"Logged in as {bot.user} ({bot.user.id})")
+    output.info(
+        f"Invite URL: https://discord.com/oauth2/authorize"
+        f"?client_id={bot.user.id}&permissions=0&scope=bot%20applications.commands"
+    )
 
 @bot.event
-async def on_server_join(server):
-    output.info("Added to {0}".format(server.name))
-    Mysql.add_server(server)
-    for channel in server.channels:
+async def on_guild_join(guild: discord.Guild):
+    output.info(f"Added to {guild.name}")
+    Mysql.add_server(guild)
+    for channel in guild.channels:
         Mysql.add_channel(channel)
 
 @bot.event
-async def on_server_leave(server):
-    Mysql.remove_server(server)
-    output.info("Removed from {0}".format(server.name))
+async def on_guild_remove(guild: discord.Guild):
+    Mysql.remove_server(guild)
+    output.info(f"Removed from {guild.name}")
 
 @bot.event
-async def on_channel_create(channel):
-    if isinstance(channel, discord.PrivateChannel):
+async def on_guild_channel_create(channel):
+    if isinstance(channel, discord.DMChannel):
         return
     Mysql.add_channel(channel)
-    output.info("Channel {0} added to {1}".format(channel.name, channel.server.name))
+    output.info(f"Channel {channel.name} added to {channel.guild.name}")
 
 @bot.event
-async def on_channel_delete(channel):
+async def on_guild_channel_delete(channel):
     Mysql.remove_channel(channel)
-    output.info("Channel {0} deleted from {1}".format(channel.name, channel.server.name))
+    output.info(f"Channel {channel.name} deleted from {channel.guild.name}")
 
-@bot.event
-async def on_command_error(error, ctx):
-    channel = ctx.message.channel
-    if isinstance(error, commands.MissingRequiredArgument):
-        await send_cmd_help(ctx)
-    elif isinstance(error, commands.BadArgument):
-        await send_cmd_help(ctx)
-    elif isinstance(error, commands.CommandInvokeError):
-        output.error("Exception in command '{}', {}".format(ctx.command.qualified_name, error.original))
-        oneliner = "Error in command '{}' - {}: {}\nIf this issue persists, Please report it in the support server.".format(
-            ctx.command.qualified_name, type(error.original).__name__, str(error.original))
-        await ctx.bot.send_message(channel, oneliner)
+# =========================
+# GLOBAL SLASH ERROR HANDLER
+# =========================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    output.error(f"Slash command error: {error}")
 
-async def send_cmd_help(ctx):
-    channel = ctx.message.channel
-    allowed_channels = parsing.parse_json('config.json')['command_channels'][ctx.command.name]
-    if channel.name not in allowed_channels:
-        return
-
-    if ctx.invoked_subcommand:
-        pages = bot.formatter.format_help_for(ctx, ctx.invoked_subcommand)
-        for page in pages:
-            em = discord.Embed(title="Missing args :x:",
-                               description=page.strip("```").replace('<', '[').replace('>', ']'),
-                               color=discord.Color.red())
-            await bot.send_message(ctx.message.channel, embed=em)
+    if interaction.response.is_done():
+        await interaction.followup.send(
+            "❌ An unexpected error occurred. Please try again later.",
+            ephemeral=True
+        )
     else:
-        pages = bot.formatter.format_help_for(ctx, ctx.command)
-        for page in pages:
-            em = discord.Embed(title="Missing args :x:",
-                               description=page.strip("```").replace('<', '[').replace('>', ']'),
-                               color=discord.Color.red())
-            await bot.send_message(ctx.message.channel, embed=em)
+        await interaction.response.send_message(
+            "❌ An unexpected error occurred. Please try again later.",
+            ephemeral=True
+        )
 
-
+# =========================
+# STARTUP
+# =========================
 database.run()
 bot.run(config["discord"]["token"])
-bot.loop.close()

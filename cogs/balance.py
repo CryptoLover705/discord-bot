@@ -1,52 +1,62 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
-from utils import rpc_module, mysql_module, parsing
-
-#result_set = database response with parameters from query
-#db_bal = nomenclature for result_set["balance"]
-#snowflake = snowflake from message context, identical to user in database
-#wallet_bal = nomenclature for wallet reponse
+import aiohttp
+from utils import rpc_module, mysql_module
 
 rpc = rpc_module.Rpc()
 mysql = mysql_module.Mysql()
 
+COINPAPRIKA_ID = "mwc-minersworldcoin"  # CoinPaprika ID for MWC
 
-class Balance:
+class Balance(commands.Cog):
+    """Slash commands for viewing balances"""
 
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    async def do_embed(self, name, db_bal, db_bal_unconfirmed):
-        # Simple embed function for displaying username and balance
+    async def fetch_price_usd(self) -> float:
+        """Fetch the current MWC price in USD from CoinPaprika"""
+        url = f"https://api.coinpaprika.com/v1/tickers/{COINPAPRIKA_ID}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                return float(data["quotes"]["USD"]["price"])
+
+    async def do_embed(self, user: discord.User, db_bal: float, db_bal_unconfirmed: float, price_usd: float) -> discord.Embed:
+        usd_balance = db_bal * price_usd
         embed = discord.Embed(colour=0xff0000)
-        embed.add_field(name="User", value=name.mention)
-        embed.add_field(name="Balance", value="{:.8f} NORT".format(round(float(db_bal), 8)))
+        embed.add_field(name="User", value=user.mention)
+        embed.add_field(
+            name="Balance",
+            value=f"{float(db_bal):.8f} MWC\n≈ ${usd_balance:,.2f} USD"
+        )
         if float(db_bal_unconfirmed) != 0.0:
-            embed.add_field(name="Unconfirmed Deposits", value="{:.8f} NORT".format(round(float(db_bal_unconfirmed), 8)))
-        try:
-            await self.bot.say(embed=embed)
-        except discord.HTTPException:
-            await self.bot.say("I need the `Embed links` permission to send this")
+            usd_unconfirmed = db_bal_unconfirmed * price_usd
+            embed.add_field(
+                name="Unconfirmed Deposits",
+                value=f"{float(db_bal_unconfirmed):.8f} MWC\n≈ ${usd_unconfirmed:,.2f} USD"
+            )
+        return embed
 
-    @commands.command(pass_context=True)
-    async def balance(self, ctx):
-        """Display your balance"""
-        channel_name = ctx.message.channel.name
-        allowed_channels = parsing.parse_json('config.json')['command_channels'][ctx.command.name]
-        if channel_name not in allowed_channels:
-            return
-        # Set important variables
-        snowflake = ctx.message.author.id
+    # ----------------- Slash Command -----------------
+    @app_commands.command(name="balance", description="Display your MWC balance in coins and USD")
+    async def balance(self, interaction: discord.Interaction):
+        snowflake = interaction.user.id
 
-        # Check if user exists in db
+        # Ensure user exists in DB
         mysql.check_for_user(snowflake)
 
+        # Fetch balances
         balance = mysql.get_balance(snowflake, check_update=True)
-        balance_unconfirmed = mysql.get_balance(snowflake, check_unconfirmed = True)
+        balance_unconfirmed = mysql.get_balance(snowflake, check_unconfirmed=True)
 
-        # Execute and return SQL Query
-        await self.do_embed(ctx.message.author, balance, balance_unconfirmed)
+        # Fetch USD price
+        price_usd = await self.fetch_price_usd()
+
+        embed = await self.do_embed(interaction.user, balance, balance_unconfirmed, price_usd)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-def setup(bot):
-    bot.add_cog(Balance(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Balance(bot))

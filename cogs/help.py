@@ -1,50 +1,44 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 from utils import checks, parsing
 
-class Help:
-    def __init__(self, bot: discord.ext.commands.Bot):
-        self.bot = bot
-        bot.remove_command('help')
 
-    @commands.command(pass_context=True)
-    async def help(self, ctx):
-        """
-        Display a useful list of commands
-        """
-        channel_name = ctx.message.channel.name
-        allowed_channels = parsing.parse_json('config.json')['command_channels'][ctx.command.name]
-        if channel_name not in allowed_channels:
+class Help(commands.Cog):
+    """Slash command for displaying a list of bot commands"""
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @app_commands.command(name="help", description="Display a list of commands")
+    async def help(self, interaction: discord.Interaction):
+        # Optional: restrict to allowed channels
+        channel_name = interaction.channel.name
+        allowed_channels = parsing.parse_json('config.json')['command_channels'].get("help", [])
+        if allowed_channels and channel_name not in allowed_channels:
+            await interaction.response.send_message(
+                "This command cannot be used in this channel.", ephemeral=True
+            )
             return
 
         desc = ""
-        for key in self.bot.commands.keys():
-            command = self.bot.get_command(key)
-            if command.hidden and not checks.is_owner(ctx):
+        for command in self.bot.tree.get_commands():  # app commands
+            # Skip hidden commands unless user is owner
+            if getattr(command, "hidden", False) and not checks.is_owner(interaction.user):
                 continue
 
-            if command.aliases:
-                desc += "`!{}`".format(command.name)+" - {}\nAliases: `{}`\n".format(command.short_doc,
-                ",".join(command.aliases))
-                desc += "\n"
-
-            elif command.short_doc:
-                desc += "`!{}`".format(command.name)+" - {}\n".format(command.short_doc)
-                desc += "\n"
-
+            # Build description with aliases if any
+            aliases = getattr(command, "aliases", [])
+            if aliases:
+                desc += f"/{command.name} - {command.description}\nAliases: {', '.join(aliases)}\n\n"
             else:
-                desc += "`!{}`\n".format(command.name)
-                desc += "\n"
+                desc += f"/{command.name} - {command.description}\n\n"
 
         embed = discord.Embed(description=desc)
-        embed.set_author(icon_url=self.bot.user.avatar_url, name="NorthernBot commands!")
-        try:
-            await self.bot.send_message(ctx.message.author, embed=embed)
-            if ctx.message.server is not None:
-                await self.bot.say("{}, I PMed you some helpful info! Make sure to double check that it is from me! :envelope:".format(ctx.message.author.mention))
-        except discord.HTTPException:
-            await self.bot.say("I need the `Embed links` permission to send this!")
+        embed.set_author(icon_url=self.bot.user.display_avatar.url, name="MWC TipBot Commands")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-def setup(bot):
-    bot.add_cog(Help(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Help(bot))

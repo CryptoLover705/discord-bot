@@ -1,154 +1,111 @@
-import discord, os, itertools
+import discord
+import os
+from discord import app_commands
 from discord.ext import commands
 from utils import output, parsing, checks, mysql_module, g
-import database
 
 mysql = mysql_module.Mysql()
 config = parsing.parse_json('config.json')["logging"]
 
-class Server:
-    def __init__(self, bot):
+
+class Server(commands.Cog):
+    """Admin commands for the bot"""
+
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.is_owner)
-    async def shutdown(self, ctx):
-        """
-        Shut down the bot [ADMIN ONLY]
-        """
-        author = str(ctx.message.author)
-    
+    # ----------------- Shutdown / Restart -----------------
+    @app_commands.command(name="shutdown", description="Shut down the bot [ADMIN ONLY]")
+    @checks.is_owner()
+    async def shutdown(self, interaction: discord.Interaction):
+        author = str(interaction.user)
         try:
-            await self.bot.say("Shutting down...")
-            await self.bot.logout()
-            self.bot.loop.stop()
-            output.info('{} has shut down the bot...'.format(author))
-    
+            await interaction.response.send_message("Shutting down...")
+            output.info(f'{author} has shut down the bot...')
+            await self.bot.close()
         except Exception as e:
-            exc = '{}: {}'.format(type(e).__name__, e)
-            output.error('{} has attempted to shut down the bot, but the following '
-                         'exception occurred;\n\t->{}'.format(author, exc))
+            output.error(f'{author} attempted shutdown but got: {type(e).__name__}: {e}')
 
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.is_owner)
-    async def restart(self, ctx):
-        """
-        Restart the bot [ADMIN ONLY]
-        """
-        author = str(ctx.message.author)
-    
+    @app_commands.command(name="restart", description="Restart the bot [ADMIN ONLY]")
+    @checks.is_owner()
+    async def restart(self, interaction: discord.Interaction):
+        author = str(interaction.user)
         try:
-            await self.bot.say("Restarting...")
-            await self.bot.logout()
-            self.bot.loop.stop()
-            output.info('{} has restarted the bot...'.format(author))
+            await interaction.response.send_message("Restarting...")
+            output.info(f'{author} has restarted the bot...')
+            await self.bot.close()
             os.system('sh restart.sh')
-    
         except Exception as e:
-            exc = '{}: {}'.format(type(e).__name__, e)
-            output.error('{} has attempted to restart the bot, but the following '
-                         'exception occurred;\n\t->{}'.format(author, exc))
+            output.error(f'{author} attempted restart but got: {type(e).__name__}: {e}')
 
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.is_owner)
-    async def load(self, ctx, module: str):
-        """
-        Load a cog located in /cogs [ADMIN ONLY]
-        """
-        author = str(ctx.message.author)
+    # ----------------- Load / Unload / Loaded -----------------
+    @app_commands.command(name="load", description="Load a cog [ADMIN ONLY]")
+    @checks.is_owner()
+    @app_commands.describe(module="Name of the module to load")
+    async def load(self, interaction: discord.Interaction, module: str):
         module = module.strip()
-    
+        author = str(interaction.user)
         try:
-            self.bot.load_extension("cogs.{}".format(module))
-            output.info('{} loaded module: {}'.format(author, module))
+            self.bot.load_extension(f"cogs.{module}")
             g.loaded_extensions.append(module)
-            await self.bot.say("Successfully loaded {}.py".format(module))
-    
+            output.info(f'{author} loaded module: {module}')
+            await interaction.response.send_message(f"Successfully loaded `{module}.py`")
         except Exception as e:
-            exc = '{}: {}'.format(type(e).__name__, e)
-            output.error('{} attempted to load module \'{}\' but the following '
-                         'exception occured;\n\t->{}'.format(author, module, exc))
-            await self.bot.say('Failed to load extension {}\n\t->{}'.format(module, exc))
-    
-    
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.is_owner)
-    async def unload(self, ctx, module: str):
-        """
-        Unload any loaded cog [ADMIN ONLY]
-        """
-        author = str(ctx.message.author)
+            output.error(f'{author} failed loading {module}: {type(e).__name__}: {e}')
+            await interaction.response.send_message(f"Failed to load `{module}`\n-> {type(e).__name__}: {e}")
+
+    @app_commands.command(name="unload", description="Unload a cog [ADMIN ONLY]")
+    @checks.is_owner()
+    @app_commands.describe(module="Name of the module to unload")
+    async def unload(self, interaction: discord.Interaction, module: str):
         module = module.strip()
-    
+        author = str(interaction.user)
         try:
-            self.bot.unload_extension("cogs.{}".format(module))
-            output.info('{} unloaded module: {}'.format(author, module))
-            g.startup_extensions.remove(module)
-            await self.bot.say("Successfully unloaded {}.py".format(module))
-    
+            self.bot.unload_extension(f"cogs.{module}")
+            g.loaded_extensions.remove(module)
+            output.info(f'{author} unloaded module: {module}')
+            await interaction.response.send_message(f"Successfully unloaded `{module}.py`")
         except Exception as e:
-            exc = '{}: {}'.format(type(e).__name__, e)
-            await self.bot.say('Failed to load extension {}\n\t->{}'.format(module, exc))
-    
-    
-    @commands.command(hidden=True)
-    @commands.check(checks.is_owner)
-    async def loaded(self):
-        """
-        List loaded cogs [ADMIN ONLY]
-        """
-        string = ""
-        for cog in g.loaded_extensions:
-            string += str(cog) + "\n"
+            output.error(f'{author} failed unloading {module}: {type(e).__name__}: {e}')
+            await interaction.response.send_message(f"Failed to unload `{module}`\n-> {type(e).__name__}: {e}")
 
-        await self.bot.say('Currently loaded extensions:\n```{}```'.format(string))
+    @app_commands.command(name="loaded", description="List all loaded cogs [ADMIN ONLY]")
+    @checks.is_owner()
+    async def loaded(self, interaction: discord.Interaction):
+        modules = "\n".join(g.loaded_extensions) or "No extensions loaded."
+        await interaction.response.send_message(f'Currently loaded extensions:\n```{modules}```')
 
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.in_server)
-    @commands.check(checks.is_owner)
-    async def allowsoak(self, ctx, enable: bool):
-        """
-        Enable and disable the soak feature [ADMIN ONLY]
-        """
-        mysql.set_soak(ctx.message.server, int(enable))
-        if enable:
-            await self.bot.say("Ok! Soaking is now enabled! :white_check_mark:")
-        else:
-            await self.bot.say("Ok! Soaking is now disabled! :no_entry_sign:")
+    # ----------------- Soak -----------------
+    @app_commands.command(name="allowsoak", description="Enable/disable the soak feature [ADMIN ONLY]")
+    @checks.is_owner()
+    @app_commands.describe(enable="Enable or disable soak (True/False)")
+    async def allowsoak(self, interaction: discord.Interaction, enable: bool):
+        mysql.set_soak(interaction.guild, int(enable))
+        msg = "Soaking is now enabled! ✅" if enable else "Soaking is now disabled! ❌"
+        await interaction.response.send_message(msg)
 
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.is_owner)
-    async def pull(self, ctx):
-        """
-        Update the bot [ADMIN ONLY]
-        """
-        await self.bot.say("Pulling...")
+    # ----------------- Git Pull -----------------
+    @app_commands.command(name="pull", description="Update the bot from git [ADMIN ONLY]")
+    @checks.is_owner()
+    async def pull(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Pulling...")
         try:
             returned = os.system("git pull")
-            await self.bot.say(":+1:Returned code "+ str(returned))
+            await interaction.followup.send(f":+1: Returned code {returned}")
         except Exception as e:
-            exc = '{}: {}'.format(type(e).__name__, e)
-            output.error('{} has attempted to update the bot, but the following '
-                         'exception occurred;\n\t->{}'.format(ctx.message.author, exc))
+            output.error(f'{interaction.user} attempted git pull but got: {type(e).__name__}: {e}')
 
-    @commands.command(pass_context=True, hidden=True)
-    @commands.check(checks.is_owner)
-    async def log(self, ctx, num_lines: int):
-        """
-        Display the last couple lines of the log [ADMIN ONLY]
-        """
+    # ----------------- Log -----------------
+    @app_commands.command(name="log", description="Display the last few lines of the log [ADMIN ONLY]")
+    @checks.is_owner()
+    @app_commands.describe(num_lines="Number of lines to display")
+    async def log(self, interaction: discord.Interaction, num_lines: int = 5):
         with open(config["file"], "r") as f:
             text = f.readlines()
-        length = len(text)
-        if num_lines < 1:
-            num_lines = 5
-        if num_lines > length:
-            num_lines = length
-        send = "```"
-        for line in itertools.islice(text, length - num_lines, length):
-            send += line
-        send += "```"
-        await self.bot.say(send)
+        num_lines = max(1, min(num_lines, len(text)))
+        last_lines = "".join(text[-num_lines:])
+        await interaction.response.send_message(f"```{last_lines}```")
 
-def setup(bot):
+
+def setup(bot: commands.Bot):
     bot.add_cog(Server(bot))

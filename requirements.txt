@@ -1,0 +1,14 @@
+# Discord bot framework (slash commands, app_commands)
+discord.py>=2.3.2,<3.0.0
+
+# Async HTTP client (CoinPaprika, pools, APIs)
+aiohttp>=3.9.0,<4.0.0
+
+# MySQL client
+PyMySQL>=1.1.0,<2.0.0
+
+# Requests (still used in some legacy utils)
+requests>=2.31.0,<3.0.0
+
+# JSON-RPC (if rpc_module relies on it)
+json-rpc>=1.15.0
