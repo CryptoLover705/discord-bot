@@ -23,7 +23,7 @@ class Airdrop(commands.Cog):
         name="airdrop",
         description="Schedule a timed MWC airdrop"
     )
-    @app_commands.checks.dynamic_check(lambda i: checks.in_server(i))
+    @app_commands.check(checks.in_server)
     async def airdrop(
         self,
         interaction: discord.Interaction,
@@ -107,12 +107,12 @@ class Airdrop(commands.Cog):
         name="airdrop_list",
         description="List your pending airdrops"
     )
-    @app_commands.checks.dynamic_check(lambda i: checks.in_server(i))
+    @app_commands.check(checks.in_server)
     async def airdrop_list(self, interaction: discord.Interaction):
         drops = mysql.fetch_airdrops_by_creator(interaction.user.id, executed=False)
         if not drops:
             await interaction.response.send_message(
-                "You have no pending airdrops.", ephemeral=True
+                "You have no pending airdrops.", ephemeral=False
             )
             return
 
@@ -135,14 +135,14 @@ class Airdrop(commands.Cog):
                 inline=False
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
     # ───────── CANCEL AIRDROP ─────────
     @app_commands.command(
         name="airdrop_cancel",
         description="Cancel a pending airdrop by ID"
     )
-    @app_commands.checks.dynamic_check(lambda i: checks.in_server(i))
+    @app_commands.check(checks.in_server)
     async def airdrop_cancel(self, interaction: discord.Interaction, airdrop_id: int):
         drop = mysql.fetch_airdrop_by_id(airdrop_id)
         if not drop or drop["creator_id"] != interaction.user.id:
@@ -159,7 +159,7 @@ class Airdrop(commands.Cog):
 
         mysql.mark_airdrop_executed(airdrop_id)
         await interaction.response.send_message(
-            f"✅ Airdrop `{airdrop_id}` canceled.", ephemeral=True
+            f"✅ Airdrop `{airdrop_id}` canceled.", ephemeral=False
         )
 
 

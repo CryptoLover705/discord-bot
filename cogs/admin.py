@@ -16,7 +16,7 @@ class Server(commands.Cog):
 
     # ----------------- Shutdown / Restart -----------------
     @app_commands.command(name="shutdown", description="Shut down the bot [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     async def shutdown(self, interaction: discord.Interaction):
         author = str(interaction.user)
         try:
@@ -27,7 +27,7 @@ class Server(commands.Cog):
             output.error(f'{author} attempted shutdown but got: {type(e).__name__}: {e}')
 
     @app_commands.command(name="restart", description="Restart the bot [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     async def restart(self, interaction: discord.Interaction):
         author = str(interaction.user)
         try:
@@ -40,7 +40,7 @@ class Server(commands.Cog):
 
     # ----------------- Load / Unload / Loaded -----------------
     @app_commands.command(name="load", description="Load a cog [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     @app_commands.describe(module="Name of the module to load")
     async def load(self, interaction: discord.Interaction, module: str):
         module = module.strip()
@@ -55,7 +55,7 @@ class Server(commands.Cog):
             await interaction.response.send_message(f"Failed to load `{module}`\n-> {type(e).__name__}: {e}")
 
     @app_commands.command(name="unload", description="Unload a cog [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     @app_commands.describe(module="Name of the module to unload")
     async def unload(self, interaction: discord.Interaction, module: str):
         module = module.strip()
@@ -70,14 +70,14 @@ class Server(commands.Cog):
             await interaction.response.send_message(f"Failed to unload `{module}`\n-> {type(e).__name__}: {e}")
 
     @app_commands.command(name="loaded", description="List all loaded cogs [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     async def loaded(self, interaction: discord.Interaction):
         modules = "\n".join(g.loaded_extensions) or "No extensions loaded."
         await interaction.response.send_message(f'Currently loaded extensions:\n```{modules}```')
 
     # ----------------- Soak -----------------
     @app_commands.command(name="allowsoak", description="Enable/disable the soak feature [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     @app_commands.describe(enable="Enable or disable soak (True/False)")
     async def allowsoak(self, interaction: discord.Interaction, enable: bool):
         mysql.set_soak(interaction.guild, int(enable))
@@ -86,7 +86,7 @@ class Server(commands.Cog):
 
     # ----------------- Git Pull -----------------
     @app_commands.command(name="pull", description="Update the bot from git [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     async def pull(self, interaction: discord.Interaction):
         await interaction.response.send_message("Pulling...")
         try:
@@ -97,7 +97,7 @@ class Server(commands.Cog):
 
     # ----------------- Log -----------------
     @app_commands.command(name="log", description="Display the last few lines of the log [ADMIN ONLY]")
-    @checks.is_owner()
+    @app_commands.checks.is_owner()
     @app_commands.describe(num_lines="Number of lines to display")
     async def log(self, interaction: discord.Interaction, num_lines: int = 5):
         with open(config["file"], "r") as f:

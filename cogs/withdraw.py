@@ -21,13 +21,13 @@ class Withdraw(commands.Cog):
 
         if channel_name not in allowed_channels:
             await interaction.response.send_message(
-                "You cannot use this command in this channel!", ephemeral=True
+                "You cannot use this command in this channel!", ephemeral=False
             )
             return
 
         if amount <= 0.0:
             await interaction.response.send_message(
-                f"{interaction.user.mention} ⚠️ You cannot withdraw <= 0!", ephemeral=True
+                f"{interaction.user.mention} ⚠️ You cannot withdraw <= 0!", ephemeral=False
             )
             return
 
@@ -52,12 +52,12 @@ class Withdraw(commands.Cog):
         owned_by_bot = False
         for address_info in rpc.listreceivedbyaddess(0, True):
             if address_info["address"] == address:
-                owned_by_bot = True
+                owned_by_bot = False
                 break
         if owned_by_bot:
             await interaction.response.send_message(
                 f"{interaction.user.mention} ⚠️ You cannot withdraw to an address owned by this bot! Use `/tip` instead.",
-                ephemeral=True
+                ephemeral=False
             )
             return
 
@@ -74,7 +74,7 @@ class Withdraw(commands.Cog):
         if txid is None:
             await interaction.response.send_message(
                 f"{interaction.user.mention} Withdrawal failed despite having the necessary balance! Please contact support.",
-                ephemeral=True
+                ephemeral=False
             )
         else:
             explorer_url = f"https://miners-world-coin-mwc.github.io/explorer/#/transaction/{txid}"
@@ -82,7 +82,7 @@ class Withdraw(commands.Cog):
             await interaction.response.send_message(
                 f"{interaction.user.mention} ✅ Withdrew **{amount} MWC** <:MWC:1451276940236423189>.\n"
                 f"Transaction ID: [{txid}]({explorer_url})",
-                ephemeral=True
+                ephemeral=False
             )
 
 async def setup(bot: commands.Bot):

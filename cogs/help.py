@@ -37,7 +37,7 @@ class Help(commands.Cog):
         embed = discord.Embed(description=desc)
         embed.set_author(icon_url=self.bot.user.display_avatar.url, name="MWC TipBot Commands")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 async def setup(bot: commands.Bot):

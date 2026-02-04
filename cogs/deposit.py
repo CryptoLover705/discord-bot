@@ -19,7 +19,7 @@ class Deposit(commands.Cog):
         allowed_channels = parsing.parse_json('config.json')['command_channels'].get("deposit", [])
         if allowed_channels and channel_name not in allowed_channels:
             await interaction.response.send_message(
-                "This command cannot be used in this channel.", ephemeral=True
+                "This command cannot be used in this channel.", ephemeral=False
             )
             return
 
@@ -36,7 +36,7 @@ class Deposit(commands.Cog):
             "The developers are not responsible for any lost funds! :warning:"
         )
 
-        await interaction.response.send_message(message, ephemeral=True)
+        await interaction.response.send_message(message, ephemeral=False)
 
 
 async def setup(bot: commands.Bot):

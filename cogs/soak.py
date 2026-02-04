@@ -30,7 +30,7 @@ class Soak(commands.Cog):
                 return float(data["quotes"]["USD"]["price"])
 
     @app_commands.command(name="soak", description="Tip all online users")
-    @app_commands.checks.dynamic_check(lambda i: checks.allow_soak(i))
+    @app_commands.check(checks.allow_soak)
     async def soak(self, interaction: discord.Interaction, amount: float):
         snowflake = interaction.user.id
         mysql.check_for_user(snowflake)

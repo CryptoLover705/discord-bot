@@ -55,7 +55,7 @@ class Balance(commands.Cog):
         price_usd = await self.fetch_price_usd()
 
         embed = await self.do_embed(interaction.user, balance, balance_unconfirmed, price_usd)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 async def setup(bot: commands.Bot):

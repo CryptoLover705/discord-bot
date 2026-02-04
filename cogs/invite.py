@@ -22,7 +22,7 @@ class Invite(commands.Cog):
             return
 
         invite_url = f"https://discord.com/oauth2/authorize?client_id={self.bot.user.id}&permissions=2147862624&scope=bot%20applications.commands"
-        await interaction.response.send_message(f":tada: {invite_url}", ephemeral=True)
+        await interaction.response.send_message(f":tada: {invite_url}", ephemeral=False)
 
 
 async def setup(bot: commands.Bot):

@@ -30,42 +30,106 @@ def run():
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
 
-        cursor.execute("""CREATE TABLE IF NOT EXISTS users (
+        # ---------------- USERS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
             snowflake_pk BIGINT UNSIGNED NOT NULL,
-            balance DECIMAL(20, 8) NOT NULL,
-            balance_unconfirmed DECIMAL(20, 8) NOT NULL,
-            address VARCHAR(34) NOT NULL, allow_soak TINYINT(1) NOT NULL,
-            PRIMARY KEY (snowflake_pk)
-            )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS deposit (
+            balance DECIMAL(20, 8) NOT NULL DEFAULT 0,
+            balance_unconfirmed DECIMAL(20, 8) NOT NULL DEFAULT 0,
+            address VARCHAR(128) NOT NULL,
+            allow_soak TINYINT(1) NOT NULL DEFAULT 1,
+            PRIMARY KEY (snowflake_pk),
+            UNIQUE KEY uq_users_address (address)
+        )
+        """)
+
+        # ---------------- DEPOSITS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS deposit (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             snowflake_fk BIGINT UNSIGNED NOT NULL,
             amount DECIMAL(20, 8) NOT NULL,
             txid VARCHAR(256) NOT NULL,
             status VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_deposit_txid (txid),
             FOREIGN KEY (snowflake_fk) REFERENCES users(snowflake_pk)
-            )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS withdrawal (
+                ON DELETE CASCADE
+        )
+        """)
+
+        # ---------------- WITHDRAWALS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS withdrawal (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             snowflake_fk BIGINT UNSIGNED NOT NULL,
             amount DECIMAL(20, 8) NOT NULL,
             txid VARCHAR(256) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_withdraw_txid (txid),
             FOREIGN KEY (snowflake_fk) REFERENCES users(snowflake_pk)
-            )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS tip (
+                ON DELETE CASCADE
+        )
+        """)
+
+        # ---------------- TIPS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tip (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             snowflake_from_fk BIGINT UNSIGNED NOT NULL,
             snowflake_to_fk BIGINT UNSIGNED NOT NULL,
             amount DECIMAL(20, 8) NOT NULL,
-            FOREIGN KEY (snowflake_from_fk) REFERENCES users(snowflake_pk),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            FOREIGN KEY (snowflake_from_fk) REFERENCES users(snowflake_pk)
+                ON DELETE CASCADE,
             FOREIGN KEY (snowflake_to_fk) REFERENCES users(snowflake_pk)
-            )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS server (
-            server_id VARCHAR(18) NOT NULL,
-            enable_soak TINYINT(1) NOT NULL,
+                ON DELETE CASCADE
+        )
+        """)
+
+        # ---------------- SERVERS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS server (
+            server_id BIGINT UNSIGNED NOT NULL,
+            enable_soak TINYINT(1) NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (server_id)
-            )""")
-        cursor.execute("""CREATE TABLE IF NOT EXISTS channel (
-            channel_id VARCHAR(18) NOT NULL,
-            server_id VARCHAR(18) NOT NULL,
-            enabled TINYINT(1) NOT NULL,
-            FOREIGN KEY (server_id) REFERENCES server(server_id),
-            PRIMARY KEY (channel_id)
-            )""")
+        )
+        """)
+
+        # ---------------- CHANNELS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS channel (
+            channel_id BIGINT UNSIGNED NOT NULL,
+            server_id BIGINT UNSIGNED NOT NULL,
+            enabled TINYINT(1) NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (channel_id),
+            FOREIGN KEY (server_id) REFERENCES server(server_id)
+                ON DELETE CASCADE
+        )
+        """)
+
+        # ---------------- AIRDROPS ----------------
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS airdrops (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            guild_id BIGINT UNSIGNED NOT NULL,
+            channel_id BIGINT UNSIGNED NOT NULL,
+            creator_id BIGINT UNSIGNED NOT NULL,
+            amount DECIMAL(20, 8) NOT NULL,
+            split TINYINT(1) NOT NULL DEFAULT 0,
+            role_id BIGINT UNSIGNED DEFAULT NULL,
+            execute_at DATETIME NOT NULL,
+            executed TINYINT(1) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_airdrops_execute (execute_at, executed),
+            KEY idx_airdrops_guild (guild_id)
+        )
+        """)
+
+        connection.commit()

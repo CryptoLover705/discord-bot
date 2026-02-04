@@ -19,7 +19,7 @@ class Uptime(commands.Cog):
         allowed_channels = parsing.parse_json('config.json')['command_channels']['uptime']
         if interaction.channel.name not in allowed_channels:
             await interaction.response.send_message(
-                "You cannot use this command in this channel!", ephemeral=True
+                "You cannot use this command in this channel!", ephemeral=False
             )
             return
 
@@ -30,7 +30,7 @@ class Uptime(commands.Cog):
         embed = discord.Embed(colour=0xFF0000)
         embed.add_field(name="Uptime", value=uptime_text)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Uptime(bot))

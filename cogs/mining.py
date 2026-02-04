@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from utils import rpc_module as rpc, parsing
+from utils import rpc_module as rpc
 from aiohttp import ClientSession
 import json
 
@@ -12,71 +12,87 @@ class Mining(commands.Cog):
         self.bot = bot
         self.rpc = rpc.Rpc()
 
-    async def fetch_pool_data(self, url: str, pool_name: str, icon_url: str = None):
+    async def fetch_bmine_data(self):
+        url = "https://bmine.net/api/stats"
         headers = {"user-agent": "Mozilla/5.0"}
-        try:
-            async with ClientSession() as session:
-                async with session.get(url, headers=headers) as resp:
-                    raw = await resp.read()
-                    data = json.loads(raw)["NORT"]
+        async with ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                raw = await resp.read()
+                data = json.loads(raw)
 
-                    workers = data["workers"]
-                    shares = data["shares"]
-                    hashrate_Ghs = data["hashrate"] / 1e9
-                    lastblock = data["lastblock"]
-                    blocks24h = data["24h_blocks"]
-                    timesincelast = data["timesincelast"] / 60  # minutes
+                # Try all possible keys to find MWC
+                coin_data = None
+                for key in ["yespowerMWC", "MWC", "minersworldcoin"]:
+                    if key in data:
+                        coin_data = data[key]
+                        break
 
-                    embed = discord.Embed(colour=0x00FF00)
-                    embed.set_author(name=f"{pool_name} Pool Information", icon_url=icon_url)
-                    embed.add_field(name="Workers", value=str(workers))
-                    embed.add_field(name="Pool Hashrate", value=f"{hashrate_Ghs:.2f} GH/s")
-                    embed.add_field(name="Shares", value=str(shares))
-                    embed.add_field(name="24hr Blocks", value=str(blocks24h))
-                    embed.add_field(name="Last Block Found", value=str(lastblock))
-                    embed.add_field(name="Time Since Last Block", value=f"{timesincelast:.2f} min")
-                    return embed
-        except Exception:
-            return None
+                if not coin_data:
+                    return None
+
+                # Extract data
+                workers = coin_data.get("workers", 0)
+                shares = coin_data.get("shares", 0)
+                hashrate = coin_data.get("hashrate", 0)
+                last_block = coin_data.get("lastblock", "?")
+                blocks_24h = coin_data.get("blocks_24h", 0)
+                time_since_last = coin_data.get("timesincelast", 0) / 60  # convert sec → min
+
+                # Auto format hashrate
+                hash_value, unit = self.format_hashrate(hashrate)
+
+                embed = discord.Embed(colour=0x00FF00)
+                embed.set_author(name="bMine Pool Information", icon_url="https://bmine.net/images/logo.png")
+                embed.add_field(name="Workers", value=str(workers))
+                embed.add_field(name="Pool Hashrate", value=f"{hash_value:.2f} {unit}")
+                embed.add_field(name="Shares", value=str(shares))
+                embed.add_field(name="24h Blocks", value=str(blocks_24h))
+                embed.add_field(name="Last Block Found", value=str(last_block))
+                embed.add_field(name="Time Since Last Block", value=f"{time_since_last:.2f} min")
+                embed.set_footer(text="ccminer.exe -a yespower -o stratum+tcp://bmine.net:3333 -u <Wallet> -p <Rigname>")
+                return embed
+
+    @staticmethod
+    def format_hashrate(hashrate: float):
+        """Auto-detect units for hashrate"""
+        units = ["H/s", "kH/s", "MH/s", "GH/s", "TH/s", "PH/s"]
+        idx = 0
+        while hashrate >= 1000 and idx < len(units) - 1:
+            hashrate /= 1000
+            idx += 1
+        return hashrate, units[idx]
 
     @app_commands.command(name="mining", description="Show MWC mining stats and pool info")
     async def mining(self, interaction: discord.Interaction):
-        # Fetch core chain info
-        mining_info = self.rpc.getmininginfo()
-        height = mining_info["blocks"]
-        difficulty = mining_info["difficulty"]
-        network_hashrate_Ghs = mining_info["networkhashps"] / 1e9
+        # ---------------- Core chain info ----------------
+        try:
+            mining_info = self.rpc.getmininginfo()
+            height = mining_info["blocks"]
+            difficulty = mining_info["difficulty"]
+            network_hashrate = mining_info["networkhashps"]
 
-        embed_chain = discord.Embed(colour=0x00FF00)
-        embed_chain.set_author(name='MWC Mining Information', icon_url="http://explorer.nort.network/images/logo.png")
-        embed_chain.add_field(name="Current Height", value=str(height))
-        embed_chain.add_field(name="Network Difficulty", value=f"{difficulty:.2f}")
-        embed_chain.add_field(name="Network Hashrate", value=f"{network_hashrate_Ghs:.2f} GH/s")
+            hash_value, unit = self.format_hashrate(network_hashrate)
 
-        await interaction.response.send_message(embed=embed_chain, ephemeral=True)
+            embed_chain = discord.Embed(colour=0x00FF00)
+            embed_chain.set_author(name='MWC Mining Information', icon_url="https://pbs.twimg.com/profile_images/2001665741133639680/oKsBqI8b_400x400.jpg")
+            embed_chain.add_field(name="Current Height", value=str(height))
+            embed_chain.add_field(name="Network Difficulty", value=f"{difficulty:.2f}")
+            embed_chain.add_field(name="Network Hashrate", value=f"{hash_value:.2f} {unit}")
 
-        # Fetch BSOD pool info
-        bsod_embed = await self.fetch_pool_data(
-            "http://api.bsod.pw/api/currencies",
-            "BSOD",
-            "https://pbs.twimg.com/profile_images/947108830495854593/XFrI4e8G_400x400.jpg"
-        )
-        if bsod_embed:
-            bsod_embed.set_footer(text="ccminer.exe -a lyra2v2 -o stratum+tcp://pool.bsod.pw:1982 -u <Wallet>.<Rigname> -p c=NORT -R 5")
-            await interaction.followup.send(embed=bsod_embed, ephemeral=True)
-        else:
-            await interaction.followup.send(":warning: Error fetching BSOD pool info!", ephemeral=True)
+            await interaction.response.send_message(embed=embed_chain, ephemeral=False)
+        except Exception as e:
+            await interaction.response.send_message(f":warning: Error fetching chain info ({type(e).__name__}): {e}", ephemeral=True)
+            return
 
-        # Fetch Erstweal pool info
-        erst_embed = await self.fetch_pool_data(
-            "https://erstweal.com/api/currencies",
-            "Erstweal"
-        )
-        if erst_embed:
-            erst_embed.set_footer(text="ccminer.exe -a lyra2v2 -o stratum+tcp://erstweal.com:4531 -u <Wallet> -p <Rigname> c=ORE")
-            await interaction.followup.send(embed=erst_embed, ephemeral=True)
-        else:
-            await interaction.followup.send(":warning: Error fetching Erstweal pool info!", ephemeral=True)
+        # ---------------- bMine pool info ----------------
+        try:
+            bmine_embed = await self.fetch_bmine_data()
+            if bmine_embed:
+                await interaction.followup.send(embed=bmine_embed, ephemeral=False)
+            else:
+                await interaction.followup.send(":warning: Could not fetch bMine pool info.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f":warning: Error fetching bMine pool info ({type(e).__name__}): {e}", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

@@ -26,7 +26,7 @@ class Tip(commands.Cog):
                 return float(data["quotes"]["USD"]["price"])
 
     @app_commands.command(name="tip", description="Tip users or roles MWC coins")
-    @app_commands.checks.dynamic_check(lambda i: checks.in_server(i))
+    @app_commands.check(checks.in_server)
     async def tip(
         self,
         interaction: discord.Interaction,
@@ -41,14 +41,14 @@ class Tip(commands.Cog):
         if interaction.channel.name not in allowed_channels:
             await interaction.response.send_message(
                 "You cannot use this command in this channel!",
-                ephemeral=True
+                ephemeral=False
             )
             return
 
         if amount <= 0:
             await interaction.response.send_message(
                 f"{interaction.user.mention} ⚠️ Tip amount must be greater than 0!",
-                ephemeral=True
+                ephemeral=False
             )
             return
 
@@ -70,7 +70,7 @@ class Tip(commands.Cog):
             if not role_members:
                 await interaction.response.send_message(
                     f"{sender.mention} ⚠️ No valid users found in that role!",
-                    ephemeral=True
+                    ephemeral=False
                 )
                 return
 
@@ -78,7 +78,7 @@ class Tip(commands.Cog):
                 await interaction.response.send_message(
                     f"{sender.mention} ⚠️ Role has **{len(role_members)} members** "
                     f"(max {MAX_ROLE_MEMBERS})",
-                    ephemeral=True
+                    ephemeral=False
                 )
                 return
 
@@ -99,7 +99,7 @@ class Tip(commands.Cog):
         if not recipients:
             await interaction.response.send_message(
                 f"{sender.mention} ⚠️ No valid recipients!",
-                ephemeral=True
+                ephemeral=False
             )
             return
 
@@ -107,7 +107,7 @@ class Tip(commands.Cog):
             await interaction.response.send_message(
                 f"{sender.mention} ⚠️ Too many recipients "
                 f"(**{len(recipients)}**, max {MAX_MULTI_USERS})",
-                ephemeral=True
+                ephemeral=False
             )
             return
 
@@ -123,7 +123,7 @@ class Tip(commands.Cog):
         if balance < total_required:
             await interaction.response.send_message(
                 f"{sender.mention} ⚠️ You need **{total_required:.8f} MWC** to complete this tip!",
-                ephemeral=True
+                ephemeral=False
             )
             return
 

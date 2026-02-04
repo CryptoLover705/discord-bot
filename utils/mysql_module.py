@@ -8,7 +8,7 @@ from typing import Optional, Union
 from datetime import datetime, timezone
 
 rpc = rpc_module.Rpc()
-MIN_CONFIRMATIONS_FOR_DEPOSIT = 2
+MIN_CONFIRMATIONS_FOR_DEPOSIT = 30
 
 
 class Mysql:
