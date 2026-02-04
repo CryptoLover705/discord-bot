@@ -5,6 +5,7 @@ from utils import parsing, rpc_module
 from decimal import Decimal
 import asyncio
 from typing import Optional, Union
+from datetime import datetime, timezone
 
 rpc = rpc_module.Rpc()
 MIN_CONFIRMATIONS_FOR_DEPOSIT = 2
@@ -157,9 +158,6 @@ class Mysql:
             self.add_to_balance(snowflake, -Decimal(amount), is_unconfirmed=True)
 
         async def check_for_updated_balance_async(self, snowflake: int):
-            """
-            Async wrapper for updating balances from RPC.
-            """
             await asyncio.to_thread(self.check_for_updated_balance, snowflake)
 
         def check_for_updated_balance(self, snowflake: int):
@@ -259,3 +257,50 @@ class Mysql:
                 cursor.execute("SELECT allow_soak FROM users WHERE snowflake_pk = %s", (str(snowflake),))
                 result = cursor.fetchone()
             return bool(result['allow_soak']) if result else False
+
+        # -------------------- AIRDROPS --------------------
+        def create_airdrop(
+            self,
+            guild_id: int,
+            channel_id: int,
+            creator_id: int,
+            amount: Decimal,
+            split: bool,
+            role_id: Optional[int],
+            execute_at: datetime
+        ) -> int:
+            """Insert a scheduled airdrop and return its ID"""
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO airdrops
+                    (guild_id, channel_id, creator_id, amount, split, role_id, execute_at, executed)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 0)
+                    """,
+                    (guild_id, channel_id, creator_id, str(amount), int(split), role_id, execute_at)
+                )
+                return cursor.lastrowid
+
+        def fetch_pending_airdrops(self, now: datetime):
+            """Get a list of airdrops ready to execute"""
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM airdrops WHERE executed = 0 AND execute_at <= %s",
+                    (now,)
+                )
+                return cursor.fetchall()
+
+        def fetch_airdrop_by_id(self, airdrop_id: int):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM airdrops WHERE id = %s",
+                    (airdrop_id,)
+                )
+                return cursor.fetchone()
+
+        def mark_airdrop_executed(self, airdrop_id: int):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "UPDATE airdrops SET executed = 1 WHERE id = %s",
+                    (airdrop_id,)
+                )

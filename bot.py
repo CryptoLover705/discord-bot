@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 
 from utils import output, parsing, mysql_module, g
@@ -7,18 +7,22 @@ import os
 import traceback
 import database
 
+from datetime import datetime, timezone
+from decimal import Decimal
+
 # =========================
 # CONFIG
 # =========================
 config = parsing.parse_json("config.json")
+airdrop_cfg = config.get("airdrop", {})
 
 # =========================
-# INTENTS (REQUIRED)
+# INTENTS
 # =========================
 intents = discord.Intents.default()
 intents.guilds = True
-intents.members = False
-intents.messages = False  # not needed for slash commands
+intents.members = True   # REQUIRED for airdrops
+intents.messages = False
 
 # =========================
 # BOT INITIALIZATION
@@ -26,7 +30,7 @@ intents.messages = False  # not needed for slash commands
 class MinerBot(commands.Bot):
     def __init__(self):
         super().__init__(
-            command_prefix=None,  # slash commands only
+            command_prefix=None,
             description=config["description"],
             intents=intents
         )
@@ -50,6 +54,109 @@ class MinerBot(commands.Bot):
         )
         output.success("Slash commands synced successfully.")
 
+        # Start airdrop loop only if enabled
+        if airdrop_cfg.get("enabled", True):
+            self.airdrop_loop.start()
+            output.info("Airdrop background loop started")
+
+    # =========================
+    # AIRDROP BACKGROUND LOOP
+    # =========================
+    @tasks.loop(seconds=airdrop_cfg.get("loop_interval_seconds", 30))
+    async def airdrop_loop(self):
+        now = datetime.now(timezone.utc)
+        pending = Mysql.fetch_pending_airdrops(now)
+
+        for drop in pending:
+            try:
+                await self.execute_airdrop(drop)
+            except Exception:
+                output.error(f"Airdrop execution error:\n{traceback.format_exc()}")
+
+    async def execute_airdrop(self, drop: dict):
+        # Safety: disabled
+        if not airdrop_cfg.get("enabled", True):
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        guild = self.get_guild(int(drop["guild_id"]))
+        if not guild:
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        channel = guild.get_channel(int(drop["channel_id"]))
+        if not channel:
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        role = guild.get_role(int(drop["role_id"])) if drop["role_id"] else None
+
+        # Safety: guild-wide airdrops
+        if role is None and not airdrop_cfg.get("allow_guild_wide", False):
+            await channel.send("⚠️ Guild-wide airdrops are disabled.")
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        members = [
+            m for m in (role.members if role else guild.members)
+            if not m.bot
+        ]
+
+        if not members:
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        # Safety: max recipients
+        if (
+            airdrop_cfg.get("use_max_recipients", True)
+            and len(members) > airdrop_cfg.get("max_recipients", 50)
+        ):
+            await channel.send(
+                f"⚠️ Airdrop cancelled: too many recipients "
+                f"({len(members)} / {airdrop_cfg['max_recipients']})"
+            )
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        split = bool(drop["split"])
+        total_amount = Decimal(drop["amount"])
+
+        per_user_amount = (
+            total_amount / len(members)
+            if split
+            else total_amount
+        )
+
+        total_required = (
+            total_amount
+            if split
+            else per_user_amount * len(members)
+        )
+
+        Mysql.check_for_user(drop["creator_id"])
+        balance = Mysql.get_balance(drop["creator_id"], check_update=True)
+
+        if balance < total_required:
+            await channel.send("⚠️ **Airdrop failed:** insufficient balance.")
+            Mysql.mark_airdrop_executed(drop["id"])
+            return
+
+        for member in members:
+            Mysql.check_for_user(member.id)
+            Mysql.add_tip(drop["creator_id"], member.id, per_user_amount)
+
+        Mysql.mark_airdrop_executed(drop["id"])
+
+        await channel.send(
+            f"🎉 **Airdrop Complete!**\n"
+            f"👥 {len(members)} users received "
+            f"**{per_user_amount:.8f} MWC** <:MWC:1451276940236423189>"
+        )
+
+
+# =========================
+# BOT INSTANCE
+# =========================
 bot = MinerBot()
 Mysql = mysql_module.Mysql()
 
@@ -104,7 +211,10 @@ async def on_guild_channel_delete(channel):
 # GLOBAL SLASH ERROR HANDLER
 # =========================
 @bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError
+):
     output.error(f"Slash command error: {error}")
 
     if interaction.response.is_done():
