@@ -187,49 +187,55 @@ class Mysql:
         async def check_for_updated_balance_async(self, snowflake: int):
             await asyncio.to_thread(self.check_for_updated_balance, snowflake)
 
-        def check_for_updated_balance(self, snowflake: int):
-            tx_list = rpc.listtransactions(str(snowflake), 100)
+        def check_for_updated_balance(self):
+            """
+            Scan wallet using listreceivedbyaddress and update balances.
+            Keeps existing deposit_callback logic intact.
+            """
+            received = rpc.listreceivedbyaddress(0, True)
 
-            for tx in tx_list:
-                if tx["category"] != "receive":
+            for entry in received:
+                address = entry.get("address")
+                amount = Decimal(entry.get("amount", 0))
+                confirmations = entry.get("confirmations", 0)
+                txids = entry.get("txids", [])
+
+                if not address or amount <= 0 or not txids:
                     continue
 
-                txid = tx["txid"]
-                amount = Decimal(tx["amount"])
-                confirmations = tx["confirmations"]
-                address = tx["address"]
-
-                status = self.get_transaction_status_by_txid(txid)
                 user = self.get_user_by_address(address)
                 if not user:
                     continue
 
                 snowflake_cur = user["snowflake_pk"]
 
-                # 🟡 new unconfirmed
-                if status == "DOESNT_EXIST" and confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                    self.add_deposit(snowflake_cur, amount, txid, 'UNCONFIRMED')
-                    self.add_to_balance_unconfirmed(snowflake_cur, amount)
+                for txid in txids:
+                    status = self.get_transaction_status_by_txid(txid)
 
-                    if self.deposit_callback:
-                        self.deposit_callback(snowflake_cur, amount, txid, False)
+                    # 🟡 new unconfirmed
+                    if status == "DOESNT_EXIST" and confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
+                        self.add_deposit(snowflake_cur, amount, txid, "UNCONFIRMED")
+                        self.add_to_balance_unconfirmed(snowflake_cur, amount)
 
-                # 🟢 new confirmed
-                elif status == "DOESNT_EXIST" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                    self.add_to_balance(snowflake_cur, amount)
-                    self.add_deposit(snowflake_cur, amount, txid, 'CONFIRMED')
+                        if self.deposit_callback:
+                            self.deposit_callback(snowflake_cur, amount, txid, False)
 
-                    if self.deposit_callback:
-                        self.deposit_callback(snowflake_cur, amount, txid, True)
+                    # 🟢 new confirmed
+                    elif status == "DOESNT_EXIST" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
+                        self.add_to_balance(snowflake_cur, amount)
+                        self.add_deposit(snowflake_cur, amount, txid, "CONFIRMED")
 
-                # 🔁 unconfirmed → confirmed
-                elif status == "UNCONFIRMED" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                    self.add_to_balance(snowflake_cur, amount)
-                    self.remove_from_balance_unconfirmed(snowflake_cur, amount)
-                    self.confirm_deposit(txid)
+                        if self.deposit_callback:
+                            self.deposit_callback(snowflake_cur, amount, txid, True)
 
-                    if self.deposit_callback:
-                        self.deposit_callback(snowflake_cur, amount, txid, True)
+                    # 🔁 unconfirmed → confirmed
+                    elif status == "UNCONFIRMED" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
+                        self.add_to_balance(snowflake_cur, amount)
+                        self.remove_from_balance_unconfirmed(snowflake_cur, amount)
+                        self.confirm_deposit(txid)
+
+                        if self.deposit_callback:
+                            self.deposit_callback(snowflake_cur, amount, txid, True)
 
         def get_transaction_status_by_txid(self, txid: str) -> str:
             with self.__setup_cursor() as cursor:
