@@ -151,46 +151,63 @@ class Mysql:
                 cursor.execute("DELETE FROM channel WHERE channel_id = %s", (str(channel.id),))
 
         # -------------------- BALANCE --------------------
-        def set_balance(self, snowflake: int, amount: Union[int, Decimal], is_unconfirmed=False):
+        def set_balance(self, snowflake: int, amount: Decimal, is_unconfirmed=False):
             field = "balance_unconfirmed" if is_unconfirmed else "balance"
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     f"UPDATE users SET {field} = %s WHERE snowflake_pk = %s",
-                    (amount, str(snowflake))
+                    (str(amount), str(snowflake))
                 )
 
-        def get_balance(self, user_id: int, check_unconfirmed: bool = False, check_update: bool = False) -> Decimal:
-            """Return confirmed (or total) balance as Decimal."""
+        def get_confirmed_balance(self, snowflake: int) -> Decimal:
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "SELECT balance, balance_unconfirmed FROM users WHERE snowflake_pk = %s",
-                    (str(user_id),)
+                    "SELECT balance FROM users WHERE snowflake_pk = %s",
+                    (str(snowflake),)
                 )
-                result = cursor.fetchone()
+                row = cursor.fetchone()
+            return Decimal(row["balance"] or 0) if row else Decimal("0")
 
-            if not result:
-                return Decimal("0")
+        def get_unconfirmed_balance(self, snowflake: int) -> Decimal:
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "SELECT balance_unconfirmed FROM users WHERE snowflake_pk = %s",
+                    (str(snowflake),)
+                )
+                row = cursor.fetchone()
+            return Decimal(row["balance_unconfirmed"] or 0) if row else Decimal("0")
 
-            balance = Decimal(result["balance"] or 0)
-            unconfirmed = Decimal(result["balance_unconfirmed"] or 0)
+        def add_to_balance(self, snowflake: int, amount: Decimal):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE snowflake_pk = %s",
+                    (str(amount), str(snowflake))
+                )
 
-            if check_unconfirmed:
-                return balance + unconfirmed
-            return balance
+        def remove_from_balance(self, snowflake: int, amount: Decimal):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "UPDATE users SET balance = balance - %s WHERE snowflake_pk = %s",
+                    (str(amount), str(snowflake))
+                )
 
-        def add_to_balance(self, snowflake: int, amount: Union[int, Decimal], is_unconfirmed=False):
-            current = Decimal(self.get_balance(snowflake, is_unconfirmed))
-            self.set_balance(snowflake, current + Decimal(amount), is_unconfirmed)
+        def add_to_balance_unconfirmed(self, snowflake: int, amount: Decimal):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "UPDATE users SET balance_unconfirmed = balance_unconfirmed + %s WHERE snowflake_pk = %s",
+                    (str(amount), str(snowflake))
+                )
 
-        def remove_from_balance(self, snowflake: int, amount: Union[int, Decimal]):
-            current = self.get_balance(snowflake)
-            self.set_balance(snowflake, current - Decimal(amount))
-
-        def add_to_balance_unconfirmed(self, snowflake: int, amount: Union[int, Decimal]):
-            self.add_to_balance(snowflake, amount, is_unconfirmed=True)
-
-        def remove_from_balance_unconfirmed(self, snowflake: int, amount: Union[int, Decimal]):
-            self.add_to_balance(snowflake, -Decimal(amount), is_unconfirmed=True)
+        def remove_from_balance_unconfirmed(self, snowflake: int, amount: Decimal):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET balance_unconfirmed = GREATEST(balance_unconfirmed - %s, 0)
+                    WHERE snowflake_pk = %s
+                    """,
+                    (str(amount), str(snowflake))
+                )
 
         # -------------------- DEPOSIT TRACKING --------------------
         async def check_for_updated_balance_async(self):
@@ -277,8 +294,11 @@ class Mysql:
                     # 🔁 Previously unconfirmed, now confirmed
                     elif status == "UNCONFIRMED" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
                         self.confirm_deposit(txid)
+
+                        # 🔄 MOVE funds from unconfirmed → confirmed
                         self.remove_from_balance_unconfirmed(snowflake, amount)
                         self.add_to_balance(snowflake, amount)
+
                         if self.deposit_callback:
                             self.deposit_callback(snowflake, amount, txid, True)
 
