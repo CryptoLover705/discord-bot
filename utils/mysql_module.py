@@ -33,6 +33,7 @@ class Mysql:
             self.__db_pass = config["db_pass"]
             self.__db = config["db"]
             self.txfee = parsing.parse_json('config.json')["txfee"]
+            self.deposit_callback = None  # callback for deposit notifications
             self.__setup_connection()
 
         def __setup_connection(self):
@@ -49,7 +50,7 @@ class Mysql:
             self.__connection.ping(reconnect=True)
             return self.__connection.cursor(pymysql.cursors.DictCursor)
 
-        # -------------------- User --------------------
+        # -------------------- USER --------------------
         def make_user(self, snowflake: int, address: str):
             with self.__setup_cursor() as cursor:
                 cursor.execute(
@@ -59,23 +60,20 @@ class Mysql:
                 )
 
         def check_for_user(self, snowflake: int):
-            """
-            Ensure user exists.
-            If user does not exist, create them and assign a new wallet address.
-            """
+            """Ensure user exists; if not, create + new address."""
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "SELECT snowflake_pk, address FROM users WHERE snowflake_pk = %s",
+                    "SELECT snowflake_pk FROM users WHERE snowflake_pk = %s",
                     (str(snowflake),)
                 )
                 result = cursor.fetchone()
 
             if not result:
-                # Create wallet address on first use
                 address = rpc.getnewaddress(str(snowflake))
                 self.make_user(snowflake, address)
 
         def get_user(self, snowflake: int) -> Optional[dict]:
+            """Return full user row for a snowflake."""
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     "SELECT snowflake_pk, address, balance, balance_unconfirmed, allow_soak "
@@ -85,6 +83,7 @@ class Mysql:
                 return cursor.fetchone()
 
         def get_user_by_address(self, address: str) -> Optional[dict]:
+            """Return user row by wallet address."""
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     "SELECT snowflake_pk, balance, balance_unconfirmed, address, allow_soak "
@@ -94,11 +93,16 @@ class Mysql:
                 return cursor.fetchone()
 
         def get_address(self, snowflake: int) -> Optional[str]:
+            """Get (and ensure) address for user."""
             self.check_for_user(snowflake)
             user = self.get_user(snowflake)
             return user["address"] if user else None
 
-        # -------------------- Servers/Channels --------------------
+        def set_deposit_callback(self, callback):
+            """Register callback for new deposit notifications."""
+            self.deposit_callback = callback
+
+        # -------------------- SERVERS/CHANNELS --------------------
         def check_guild(self, guild: discord.Guild):
             if guild is None:
                 return
@@ -134,13 +138,17 @@ class Mysql:
             with self.__setup_cursor() as cursor:
                 cursor.execute("DELETE FROM channel WHERE channel_id = %s", (str(channel.id),))
 
-        # -------------------- Balance --------------------
+        # -------------------- BALANCE --------------------
         def set_balance(self, snowflake: int, amount: Union[int, Decimal], is_unconfirmed=False):
             field = "balance_unconfirmed" if is_unconfirmed else "balance"
             with self.__setup_cursor() as cursor:
-                cursor.execute(f"UPDATE users SET {field} = %s WHERE snowflake_pk = %s", (amount, str(snowflake)))
+                cursor.execute(
+                    f"UPDATE users SET {field} = %s WHERE snowflake_pk = %s",
+                    (amount, str(snowflake))
+                )
 
         def get_balance(self, user_id: int, check_unconfirmed: bool = False, check_update: bool = False) -> float:
+            """Return confirmed (or total) balance."""
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     "SELECT balance, balance_unconfirmed FROM users WHERE snowflake_pk = %s",
@@ -156,11 +164,10 @@ class Mysql:
 
             if check_unconfirmed:
                 return balance + unconfirmed
-
             return balance
 
         def add_to_balance(self, snowflake: int, amount: Union[int, Decimal], is_unconfirmed=False):
-            current = self.get_balance(snowflake, unconfirmed=is_unconfirmed)
+            current = self.get_balance(snowflake, check_unconfirmed=is_unconfirmed)
             self.set_balance(snowflake, current + Decimal(amount), is_unconfirmed)
 
         def remove_from_balance(self, snowflake: int, amount: Union[int, Decimal]):
@@ -173,34 +180,53 @@ class Mysql:
         def remove_from_balance_unconfirmed(self, snowflake: int, amount: Union[int, Decimal]):
             self.add_to_balance(snowflake, -Decimal(amount), is_unconfirmed=True)
 
+        # -------------------- DEPOSIT TRACKING --------------------
         async def check_for_updated_balance_async(self, snowflake: int):
             await asyncio.to_thread(self.check_for_updated_balance, snowflake)
 
         def check_for_updated_balance(self, snowflake: int):
             tx_list = rpc.listtransactions(str(snowflake), 100)
+
             for tx in tx_list:
                 if tx["category"] != "receive":
                     continue
+
                 txid = tx["txid"]
                 amount = Decimal(tx["amount"])
                 confirmations = tx["confirmations"]
                 address = tx["address"]
+
                 status = self.get_transaction_status_by_txid(txid)
                 user = self.get_user_by_address(address)
                 if not user:
                     continue
+
                 snowflake_cur = user["snowflake_pk"]
 
-                if status == "DOESNT_EXIST" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                    self.add_to_balance(snowflake_cur, amount)
-                    self.add_deposit(snowflake_cur, amount, txid, 'CONFIRMED')
-                elif status == "DOESNT_EXIST" and confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
+                # 🟡 new unconfirmed
+                if status == "DOESNT_EXIST" and confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
                     self.add_deposit(snowflake_cur, amount, txid, 'UNCONFIRMED')
                     self.add_to_balance_unconfirmed(snowflake_cur, amount)
+
+                    if self.deposit_callback:
+                        self.deposit_callback(snowflake_cur, amount, txid, False)
+
+                # 🟢 new confirmed
+                elif status == "DOESNT_EXIST" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
+                    self.add_to_balance(snowflake_cur, amount)
+                    self.add_deposit(snowflake_cur, amount, txid, 'CONFIRMED')
+
+                    if self.deposit_callback:
+                        self.deposit_callback(snowflake_cur, amount, txid, True)
+
+                # 🔁 unconfirmed → confirmed
                 elif status == "UNCONFIRMED" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
                     self.add_to_balance(snowflake_cur, amount)
                     self.remove_from_balance_unconfirmed(snowflake_cur, amount)
                     self.confirm_deposit(txid)
+
+                    if self.deposit_callback:
+                        self.deposit_callback(snowflake_cur, amount, txid, True)
 
         def get_transaction_status_by_txid(self, txid: str) -> str:
             with self.__setup_cursor() as cursor:

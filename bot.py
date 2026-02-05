@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -9,6 +10,10 @@ import database
 
 from datetime import datetime, timezone
 from decimal import Decimal
+
+from utils.mysql_module import MIN_CONFIRMATIONS_FOR_DEPOSIT, Mysql
+
+mysql = Mysql()
 
 # =========================
 # CONFIG
@@ -182,6 +187,31 @@ async def on_ready():
         f"Invite URL: https://discord.com/oauth2/authorize"
         f"?client_id={bot.user.id}&permissions=0&scope=bot%20applications.commands"
     )
+
+@bot.event
+async def on_ready():
+    async def deposit_notify(snowflake, amount: Decimal, txid: str, confirmed: bool):
+        user = await bot.fetch_user(int(snowflake))
+        if not user:
+            return
+
+        status = "CONFIRMED ✅" if confirmed else "UNCONFIRMED ⏳"
+
+        await user.send(
+            f"💰 **MWC Deposit Received**\n\n"
+            f"Amount: `{amount:.8f} MWC`\n"
+            f"Status: **{status}**\n"
+            f"TXID: `{txid}`\n\n"
+            f"{'Funds are now spendable.' if confirmed else f'Funds will be credited after {MIN_CONFIRMATIONS_FOR_DEPOSIT} confirmations.'}"
+        )
+
+    # bind callback
+    mysql.set_deposit_callback(
+        lambda *args: asyncio.create_task(deposit_notify(*args))
+    )
+
+    print("✅ Deposit notifications enabled")
+
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
