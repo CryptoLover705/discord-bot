@@ -50,7 +50,7 @@ class Withdraw(commands.Cog):
 
         # Prevent withdrawing to bot-owned addresses
         owned_by_bot = False
-        for address_info in rpc.listreceivedbyaddess(0, True):
+        for address_info in rpc.listreceivedbyaddress(0, True):
             if address_info["address"] == address:
                 owned_by_bot = False
                 break

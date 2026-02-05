@@ -307,6 +307,21 @@ class Mysql:
                 cursor.execute("SELECT status FROM deposit WHERE txid = %s", (txid,))
                 result = cursor.fetchone()
             return result["status"] if result else "DOESNT_EXIST"
+        
+        # ---------- PUBLIC BALANCE ACCESS (FIX NAME MANGLING) ----------
+        def get_balance(self, user_id: int, confirmed_only: bool = True, check_update: bool = False) -> Decimal:
+            """
+            Public balance accessor.
+            confirmed_only=True  -> confirmed balance only
+            confirmed_only=False -> confirmed + unconfirmed
+            check_update=True     -> refresh balance from wallet before returning
+            """
+            if check_update:
+                self.update_balance(user_id)  # <-- implement this if you want automatic update
+            
+            if confirmed_only:
+                return self._Mysql__get_balance(user_id, check_unconfirmed=False)
+            return self._Mysql__get_balance(user_id, check_unconfirmed=True)
 
         # -------------------- Deposit/Withdraw/Tip/Soak --------------------
         def add_deposit(self, snowflake: int, amount: Decimal, txid: str, status: str):
@@ -321,28 +336,67 @@ class Mysql:
                 cursor.execute("UPDATE deposit SET status = %s WHERE txid = %s", ('CONFIRMED', txid))
 
         def create_withdrawal(self, snowflake: int, address: str, amount: Decimal) -> Optional[str]:
+            amount = Decimal(amount)
+
+            # Confirmed balance only
+            balance = self.get_balance(snowflake, confirmed_only=True)
+
+            if amount <= 0:
+                return None
+
+            if balance < amount:
+                return None  # insufficient funds
+
             if not rpc.settxfee(self.txfee):
                 return None
-            txid = rpc.sendtoaddress(address, float(amount - self.txfee))
+
+            send_amount = amount - self.txfee
+            if send_amount <= 0:
+                return None
+
+            txid = rpc.sendtoaddress(address, float(send_amount))
             if not txid:
                 return None
+
             self.remove_from_balance(snowflake, amount)
             return self.add_withdrawal(snowflake, amount, txid)
 
         def add_withdrawal(self, snowflake: int, amount: Decimal, txid: str) -> str:
+            amount = Decimal(amount)
+
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "INSERT INTO withdrawal(snowflake_fk, amount, txid) VALUES (%s, %s, %s)",
+                    """
+                    INSERT INTO withdrawal (snowflake_fk, amount, txid)
+                    VALUES (%s, %s, %s)
+                    """,
                     (str(snowflake), str(amount), txid)
                 )
+
             return txid
 
         def add_tip(self, from_snowflake: int, to_snowflake: int, amount: Decimal):
-            self.remove_from_balance(from_snowflake, amount)
-            self.add_to_balance(to_snowflake, amount)
+            amount = Decimal(amount)
+
             with self.__setup_cursor() as cursor:
+                # Remove from sender
                 cursor.execute(
-                    "INSERT INTO tip(snowflake_from_fk, snowflake_to_fk, amount) VALUES (%s, %s, %s)",
+                    "UPDATE users SET balance = balance - %s WHERE snowflake_pk = %s",
+                    (str(amount), str(from_snowflake))
+                )
+
+                # Add to receiver
+                cursor.execute(
+                    "UPDATE users SET balance = balance + %s WHERE snowflake_pk = %s",
+                    (str(amount), str(to_snowflake))
+                )
+
+                # Record tip
+                cursor.execute(
+                    """
+                    INSERT INTO tip (snowflake_from_fk, snowflake_to_fk, amount)
+                    VALUES (%s, %s, %s)
+                    """,
                     (str(from_snowflake), str(to_snowflake), str(amount))
                 )
 
@@ -452,6 +506,9 @@ class Mysql:
             execute_at: datetime
         ) -> int:
             """Insert a scheduled airdrop and return its ID"""
+
+            amount = Decimal(amount)
+
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     """
@@ -459,7 +516,15 @@ class Mysql:
                     (guild_id, channel_id, creator_id, amount, split, role_id, execute_at, executed)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, 0)
                     """,
-                    (guild_id, channel_id, creator_id, str(amount), int(split), role_id, execute_at)
+                    (
+                        int(guild_id),
+                        int(channel_id),
+                        int(creator_id),
+                        str(amount),
+                        int(split),
+                        int(role_id) if role_id is not None else None,
+                        execute_at,
+                    )
                 )
                 return cursor.lastrowid
 
@@ -467,7 +532,12 @@ class Mysql:
             """Get a list of airdrops ready to execute"""
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM airdrops WHERE executed = 0 AND execute_at <= %s",
+                    """
+                    SELECT *
+                    FROM airdrops
+                    WHERE executed = 0 AND execute_at <= %s
+                    ORDER BY execute_at ASC
+                    """,
                     (now,)
                 )
                 return cursor.fetchall()
@@ -476,13 +546,17 @@ class Mysql:
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     "SELECT * FROM airdrops WHERE id = %s",
-                    (airdrop_id,)
+                    (int(airdrop_id),)
                 )
                 return cursor.fetchone()
 
         def mark_airdrop_executed(self, airdrop_id: int):
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "UPDATE airdrops SET executed = 1 WHERE id = %s",
-                    (airdrop_id,)
+                    """
+                    UPDATE airdrops
+                    SET executed = 1
+                    WHERE id = %s AND executed = 0
+                    """,
+                    (int(airdrop_id),)
                 )
