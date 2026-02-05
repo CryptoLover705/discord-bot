@@ -8,9 +8,11 @@ class Rpc:
         config = parsing.parse_json("config.json")["rpc"]
 
         self.rpc_host = config["rpc_host"]
-        self.rpc_port = config["rpc_port"]
+        self.rpc_port = int(config["rpc_port"])  # ensure int
         self.rpc_user = config["rpc_user"]
         self.rpc_pass = config["rpc_pass"]
+
+        # <-- NO TRAILING SLASH
         self.server_url = f"http://{self.rpc_host}:{self.rpc_port}"
         self.headers = {"content-type": "application/json"}
 
@@ -59,11 +61,17 @@ class Rpc:
     def getblockcount(self):
         return self._call("getblockcount")
 
-    def getinfo(self):
-        return self._call("getinfo")
+    def getblockchaininfo(self):
+        return self._call("getblockchaininfo")
 
-    def listmasternodes(self):
-        return self._call("listmasternodes")
+    def getnetworkinfo(self):
+        return self._call("getnetworkinfo")
+
+    def getwalletinfo(self):
+        return self._call("getwalletinfo")
+
+    # def listmasternodes(self):
+    #     return self._call("listmasternodes")
 
     def getmininginfo(self):
         return self._call("getmininginfo")

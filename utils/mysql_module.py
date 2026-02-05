@@ -59,22 +59,26 @@ class Mysql:
                 )
 
         def check_for_user(self, snowflake: int):
+            """
+            Ensure user exists.
+            If user does not exist, create them and assign a new wallet address.
+            """
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "SELECT snowflake_pk, address, balance, balance_unconfirmed, allow_soak "
-                    "FROM users WHERE snowflake_pk = %s",
+                    "SELECT snowflake_pk, address FROM users WHERE snowflake_pk = %s",
                     (str(snowflake),)
                 )
                 result = cursor.fetchone()
 
             if not result:
+                # Create wallet address on first use
                 address = rpc.getnewaddress(str(snowflake))
                 self.make_user(snowflake, address)
 
         def get_user(self, snowflake: int) -> Optional[dict]:
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "SELECT snowflake_pk, balance, balance_unconfirmed, address, allow_soak "
+                    "SELECT snowflake_pk, address, balance, balance_unconfirmed, allow_soak "
                     "FROM users WHERE snowflake_pk = %s",
                     (str(snowflake),)
                 )
@@ -90,8 +94,9 @@ class Mysql:
                 return cursor.fetchone()
 
         def get_address(self, snowflake: int) -> Optional[str]:
+            self.check_for_user(snowflake)
             user = self.get_user(snowflake)
-            return user.get("address") if user else None
+            return user["address"] if user else None
 
         # -------------------- Servers/Channels --------------------
         def check_guild(self, guild: discord.Guild):
@@ -135,13 +140,24 @@ class Mysql:
             with self.__setup_cursor() as cursor:
                 cursor.execute(f"UPDATE users SET {field} = %s WHERE snowflake_pk = %s", (amount, str(snowflake)))
 
-        def get_balance(self, snowflake: int, check_update=False, unconfirmed=False) -> Decimal:
-            if check_update:
-                self.check_for_updated_balance(snowflake)
-            user = self.get_user(snowflake)
-            if not user:
-                return Decimal(0)
-            return Decimal(user["balance_unconfirmed"] if unconfirmed else user["balance"])
+        def get_balance(self, user_id: int, check_unconfirmed: bool = False, check_update: bool = False) -> float:
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "SELECT balance, balance_unconfirmed FROM users WHERE snowflake_pk = %s",
+                    (str(user_id),)
+                )
+                result = cursor.fetchone()
+
+            if not result:
+                return 0.0
+
+            balance = float(result["balance"] or 0)
+            unconfirmed = float(result["balance_unconfirmed"] or 0)
+
+            if check_unconfirmed:
+                return balance + unconfirmed
+
+            return balance
 
         def add_to_balance(self, snowflake: int, amount: Union[int, Decimal], is_unconfirmed=False):
             current = self.get_balance(snowflake, unconfirmed=is_unconfirmed)

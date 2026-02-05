@@ -4,6 +4,14 @@ from discord.ext import commands
 
 from utils import rpc_module
 
+# ---------------------- OWNER CHECK ----------------------
+def is_owner():
+    async def predicate(interaction: discord.Interaction):
+        if interaction.user.id != 1157581316175437884:  # replace with your Discord ID
+            raise discord.app_commands.CheckFailure("You are not allowed to use this command.")
+        return True
+    return app_commands.check(predicate)
+
 
 class WalletInfo(commands.Cog):
     """Admin wallet info commands"""
@@ -16,14 +24,17 @@ class WalletInfo(commands.Cog):
         name="wallet",
         description="Show daemon wallet info [ADMIN ONLY]"
     )
-    @app_commands.checks.is_owner()
+    @is_owner()
     async def wallet(self, interaction: discord.Interaction):
         """Show wallet info"""
         try:
-            info = self.rpc.getinfo()
-            wallet_balance = float(info.get("balance", 0))
-            block_height = info.get("blocks", "N/A")
-            connection_count = self.rpc.getconnectioncount()
+            wallet_info = self.rpc.getwalletinfo()
+            network_info = self.rpc.getnetworkinfo()
+            chain_info = self.rpc.getblockchaininfo()
+
+            wallet_balance = float(wallet_info.get("balance", 0))
+            block_height = chain_info.get("blocks", "N/A")
+            connection_count = network_info.get("connections", 0)
 
             embed = discord.Embed(
                 title="🧾 Wallet Info",

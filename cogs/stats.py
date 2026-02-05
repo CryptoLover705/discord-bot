@@ -17,25 +17,33 @@ class Stats(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    async def fetch_price_data(self) -> dict:
+    async def fetch_price_data(self) -> Decimal:
+        """Fetch MWC price in USD from CoinPaprika"""
+        url = f"https://api.coinpaprika.com/v1/tickers/{COINPAPRIKA_ID}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                return Decimal(str(data["quotes"]["USD"]["price"]))
+
+    async def fetch_chain_supply(self) -> Decimal:
+        """Fetch circulating supply from chain and convert from satoshi"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(CHAIN_INFO_URL, timeout=10) as resp:
+                data = await resp.json()
+                sat_supply = Decimal(str(data["result"]["supply"]))
+                return sat_supply / SATOSHIS
+
+    async def fetch_volume_and_rank(self) -> dict:
+        """Fetch 24h volume and rank from CoinPaprika"""
         url = f"https://api.coinpaprika.com/v1/tickers/{COINPAPRIKA_ID}"
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
                 usd = data["quotes"]["USD"]
                 return {
-                    "price_usd": Decimal(str(usd["price"])),
-                    "market_cap_usd": Decimal(str(usd["market_cap"])),
                     "volume_24h": Decimal(str(usd["volume_24h"])),
                     "rank": data.get("rank", "?")
                 }
-
-    async def fetch_chain_supply(self) -> Decimal:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(CHAIN_INFO_URL, timeout=10) as resp:
-                data = await resp.json()
-                sat_supply = Decimal(str(data["result"]["supply"]))
-                return sat_supply / SATOSHIS
 
     @app_commands.command(
         name="stats",
@@ -54,10 +62,15 @@ class Stats(commands.Cog):
         await interaction.response.defer()
 
         try:
-            price_data, supply = await asyncio.gather(
+            # Parallel fetch: price, supply, volume/rank
+            price, supply, vr = await asyncio.gather(
                 self.fetch_price_data(),
-                self.fetch_chain_supply()
+                self.fetch_chain_supply(),
+                self.fetch_volume_and_rank()
             )
+
+            # Calculate market cap manually
+            market_cap = price * supply
 
             embed = discord.Embed(
                 title="⛏️ Miners World Coin (MWC) Stats",
@@ -71,31 +84,31 @@ class Stats(commands.Cog):
 
             embed.add_field(
                 name="Price (USD)",
-                value=f"${price_data['price_usd']:.8f}",
+                value=f"${price:.8f}",
                 inline=True
             )
 
             embed.add_field(
                 name="Market Cap",
-                value=f"${price_data['market_cap_usd']:,}",
+                value=f"${market_cap:,.4f}",
                 inline=True
             )
 
             embed.add_field(
                 name="Circulating Supply",
-                value=f"{supply:,.8f} MWC",
+                value=f"{supply:,.6f} MWC",
                 inline=True
             )
 
             embed.add_field(
                 name="24h Volume",
-                value=f"${price_data['volume_24h']:,}",
+                value=f"${vr['volume_24h']:,}",
                 inline=True
             )
 
             embed.add_field(
                 name="Rank",
-                value=f"#{price_data['rank']}",
+                value=f"#{vr['rank']}",
                 inline=True
             )
 

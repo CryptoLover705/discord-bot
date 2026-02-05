@@ -29,13 +29,13 @@ class Balance(commands.Cog):
         embed.add_field(name="User", value=user.mention)
         embed.add_field(
             name="Balance",
-            value=f"{float(db_bal):.8f} MWC\n≈ ${usd_balance:,.2f} USD"
+            value=f"{db_bal:.8f} MWC\n≈ ${usd_balance:,.6f} USD"
         )
-        if float(db_bal_unconfirmed) != 0.0:
+        if db_bal_unconfirmed != 0.0:
             usd_unconfirmed = db_bal_unconfirmed * price_usd
             embed.add_field(
                 name="Unconfirmed Deposits",
-                value=f"{float(db_bal_unconfirmed):.8f} MWC\n≈ ${usd_unconfirmed:,.2f} USD"
+                value=f"{db_bal_unconfirmed:.8f} MWC\n≈ ${usd_unconfirmed:,.6f} USD"
             )
         return embed
 
