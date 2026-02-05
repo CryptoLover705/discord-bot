@@ -103,17 +103,20 @@ class Mysql:
             self.deposit_callback = callback
 
         # -------------------- SERVERS/CHANNELS --------------------
-        def check_guild(self, guild: discord.Guild):
-            if guild is None:
-                return
+        def check_guild(self, guild_id: int):
             with self.__setup_cursor() as cursor:
                 cursor.execute(
-                    "SELECT server_id, enable_soak FROM server WHERE server_id = %s",
-                    (str(guild.id),)
+                    "SELECT server_id FROM server WHERE server_id = %s",
+                    (str(guild_id),)
                 )
                 result = cursor.fetchone()
+
             if not result:
-                self.add_guild(guild)
+                with self.__setup_cursor() as cursor:
+                    cursor.execute(
+                        "INSERT INTO server (server_id, enable_soak) VALUES (%s, %s)",
+                        (str(guild_id), 1)
+                    )
 
         def add_guild(self, guild: discord.Guild):
             with self.__setup_cursor() as cursor:
@@ -272,19 +275,22 @@ class Mysql:
                     (str(from_snowflake), str(to_snowflake), str(amount))
                 )
 
-        def check_soak(self, guild: discord.Guild) -> bool:
-            self.check_guild(guild)
+        def check_soak(self, guild_id: int) -> bool:
+            self.check_guild(guild_id)
             with self.__setup_cursor() as cursor:
-                cursor.execute("SELECT enable_soak FROM server WHERE server_id = %s", (str(guild.id),))
+                cursor.execute(
+                    "SELECT enable_soak FROM server WHERE server_id = %s",
+                    (str(guild_id),)
+                )
                 result = cursor.fetchone()
-            return bool(result['enable_soak']) if result else False
 
-        def set_soak(self, guild: discord.Guild, enable: bool):
-            self.check_guild(guild)
+            return bool(result["enable_soak"]) if result else False
+
+        def set_soak(self, guild_id: int, enable: bool):
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     "UPDATE server SET enable_soak = %s WHERE server_id = %s",
-                    (int(enable), str(guild.id))
+                    (int(enable), str(guild_id))
                 )
 
         def set_soakme(self, snowflake: int, enable: bool):
