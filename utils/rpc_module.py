@@ -84,3 +84,10 @@ class Rpc:
 
     def settxfee(self, amount):
         return self._call("settxfee", [amount])
+    
+    def gettransaction(self, txid: str, include_watchonly: bool = True):
+        """
+        Get detailed info about a transaction in the wallet.
+        """
+        return self._call("gettransaction", [txid, include_watchonly])
+

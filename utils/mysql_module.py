@@ -102,6 +102,15 @@ class Mysql:
             """Register callback for new deposit notifications."""
             self.deposit_callback = callback
 
+        def deposit_callback(self, snowflake, amount, txid, confirmed):
+            user = self.bot.get_user(int(snowflake))
+            if not user:
+                return
+
+            status = "CONFIRMED" if confirmed else "UNCONFIRMED"
+            msg = f"💰 Deposit {status}\nAmount: {amount} MWC\nTXID: `{txid}`"
+            self.bot.loop.create_task(user.send(msg))
+
         # -------------------- SERVERS/CHANNELS --------------------
         def check_guild(self, guild_id: int):
             with self.__setup_cursor() as cursor:
@@ -150,8 +159,8 @@ class Mysql:
                     (amount, str(snowflake))
                 )
 
-        def get_balance(self, user_id: int, check_unconfirmed: bool = False, check_update: bool = False) -> float:
-            """Return confirmed (or total) balance."""
+        def get_balance(self, user_id: int, check_unconfirmed: bool = False, check_update: bool = False) -> Decimal:
+            """Return confirmed (or total) balance as Decimal."""
             with self.__setup_cursor() as cursor:
                 cursor.execute(
                     "SELECT balance, balance_unconfirmed FROM users WHERE snowflake_pk = %s",
@@ -160,17 +169,17 @@ class Mysql:
                 result = cursor.fetchone()
 
             if not result:
-                return 0.0
+                return Decimal("0")
 
-            balance = float(result["balance"] or 0)
-            unconfirmed = float(result["balance_unconfirmed"] or 0)
+            balance = Decimal(result["balance"] or 0)
+            unconfirmed = Decimal(result["balance_unconfirmed"] or 0)
 
             if check_unconfirmed:
                 return balance + unconfirmed
             return balance
 
         def add_to_balance(self, snowflake: int, amount: Union[int, Decimal], is_unconfirmed=False):
-            current = self.get_balance(snowflake, check_unconfirmed=is_unconfirmed)
+            current = Decimal(self.get_balance(snowflake, is_unconfirmed))
             self.set_balance(snowflake, current + Decimal(amount), is_unconfirmed)
 
         def remove_from_balance(self, snowflake: int, amount: Union[int, Decimal]):
@@ -184,58 +193,94 @@ class Mysql:
             self.add_to_balance(snowflake, -Decimal(amount), is_unconfirmed=True)
 
         # -------------------- DEPOSIT TRACKING --------------------
-        async def check_for_updated_balance_async(self, snowflake: int):
-            await asyncio.to_thread(self.check_for_updated_balance, snowflake)
+        async def check_for_updated_balance_async(self):
+            """
+            Async wrapper: scans all users for deposits without needing a specific snowflake.
+            """
+            await asyncio.to_thread(self.check_for_updated_balance)
 
         def check_for_updated_balance(self):
             """
             Scan wallet using listreceivedbyaddress and update balances.
-            Keeps existing deposit_callback logic intact.
+            Handles:
+            - Missed deposits on startup
+            - Multi-output transactions
+            - Auto-confirmation
+            - Calls deposit_callback when new deposits are found
             """
-            received = rpc.listreceivedbyaddress(0, True)
+            # Fetch all users from DB
+            with self.__setup_cursor() as cursor:
+                cursor.execute("SELECT snowflake_pk, address FROM users")
+                users = cursor.fetchall()
+            address_to_snowflake = {u["address"]: u["snowflake_pk"] for u in users}
 
-            for entry in received:
+            try:
+                received_list = rpc.listreceivedbyaddress(
+                    minconf=0,
+                    include_empty=True,
+                    include_watch_only=True
+                )
+            except Exception as e:
+                print(f"[RECOVERY] RPC error fetching received list: {e}")
+                return
+
+            # Map user addresses to snowflake
+            with self.__setup_cursor() as cursor:
+                cursor.execute("SELECT snowflake_pk, address FROM users")
+                users = cursor.fetchall()
+            address_to_snowflake = {u["address"]: u["snowflake_pk"] for u in users}
+
+            for entry in received_list:
                 address = entry.get("address")
-                amount = Decimal(entry.get("amount", 0))
-                confirmations = entry.get("confirmations", 0)
                 txids = entry.get("txids", [])
-
-                if not address or amount <= 0 or not txids:
+                if not address or address not in address_to_snowflake or not txids:
                     continue
 
-                user = self.get_user_by_address(address)
-                if not user:
-                    continue
-
-                snowflake_cur = user["snowflake_pk"]
+                snowflake = address_to_snowflake[address]
 
                 for txid in txids:
                     status = self.get_transaction_status_by_txid(txid)
+                    if status == "CONFIRMED":
+                        continue
 
-                    # 🟡 new unconfirmed
+                    try:
+                        tx = rpc.gettransaction(txid)
+                    except Exception as e:
+                        print(f"[RECOVERY] Failed to fetch tx {txid}: {e}")
+                        continue
+
+                    confirmations = tx.get("confirmations", 0)
+
+                    # Sum amounts for this address (multi-output TX)
+                    amount = Decimal("0")
+                    for detail in tx.get("details", []):
+                        if detail.get("category") == "receive" and detail.get("address") == address:
+                            amount += Decimal(detail.get("amount", 0))
+
+                    if amount <= 0:
+                        continue
+
+                    # 🟡 New unconfirmed deposit
                     if status == "DOESNT_EXIST" and confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                        self.add_deposit(snowflake_cur, amount, txid, "UNCONFIRMED")
-                        self.add_to_balance_unconfirmed(snowflake_cur, amount)
-
+                        self.add_deposit(snowflake, amount, txid, "UNCONFIRMED")
+                        self.add_to_balance_unconfirmed(snowflake, amount)
                         if self.deposit_callback:
-                            self.deposit_callback(snowflake_cur, amount, txid, False)
+                            self.deposit_callback(snowflake, amount, txid, False)
 
-                    # 🟢 new confirmed
+                    # 🟢 New confirmed deposit
                     elif status == "DOESNT_EXIST" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                        self.add_to_balance(snowflake_cur, amount)
-                        self.add_deposit(snowflake_cur, amount, txid, "CONFIRMED")
-
+                        self.add_deposit(snowflake, amount, txid, "CONFIRMED")
+                        self.add_to_balance(snowflake, amount)
                         if self.deposit_callback:
-                            self.deposit_callback(snowflake_cur, amount, txid, True)
+                            self.deposit_callback(snowflake, amount, txid, True)
 
-                    # 🔁 unconfirmed → confirmed
+                    # 🔁 Previously unconfirmed, now confirmed
                     elif status == "UNCONFIRMED" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                        self.add_to_balance(snowflake_cur, amount)
-                        self.remove_from_balance_unconfirmed(snowflake_cur, amount)
                         self.confirm_deposit(txid)
-
+                        self.remove_from_balance_unconfirmed(snowflake, amount)
+                        self.add_to_balance(snowflake, amount)
                         if self.deposit_callback:
-                            self.deposit_callback(snowflake_cur, amount, txid, True)
+                            self.deposit_callback(snowflake, amount, txid, True)
 
         def get_transaction_status_by_txid(self, txid: str) -> str:
             with self.__setup_cursor() as cursor:
@@ -311,6 +356,69 @@ class Mysql:
                 cursor.execute("SELECT allow_soak FROM users WHERE snowflake_pk = %s", (str(snowflake),))
                 result = cursor.fetchone()
             return bool(result['allow_soak']) if result else False
+        
+        def recover_missed_deposits(self):
+            print("[RECOVERY] Scanning for missed deposits...")
+
+            # Fetch all users
+            with self.__setup_cursor() as cursor:
+                cursor.execute("SELECT snowflake_pk, address FROM users")
+                users = cursor.fetchall()
+            address_to_snowflake = {u["address"]: u["snowflake_pk"] for u in users}
+
+            try:
+                # ✅ Only pass 3 arguments to listreceivedbyaddress
+                received_list = rpc.listreceivedbyaddress(
+                    minconf=0,
+                    include_empty=True,
+                    include_watch_only=True
+                )
+            except Exception as e:
+                print(f"[RECOVERY] RPC error fetching received list: {e}")
+                return
+
+            # Process all received entries
+            for entry in received_list:
+                address = entry.get("address")
+                txids = entry.get("txids", [])
+
+                # Skip addresses that are not in our DB
+                if not address or address not in address_to_snowflake or not txids:
+                    continue
+
+                snowflake = address_to_snowflake[address]
+
+                for txid in txids:
+                    # Skip if deposit already recorded
+                    if self.get_transaction_status_by_txid(txid) != "DOESNT_EXIST":
+                        continue
+
+                    try:
+                        tx = rpc.gettransaction(txid)
+                    except Exception as e:
+                        print(f"[RECOVERY] Failed to fetch tx {txid}: {e}")
+                        continue
+
+                    confirmations = tx.get("confirmations", 0)
+
+                    # Sum multi-output amounts
+                    amount = Decimal("0")
+                    for d in tx.get("details", []):
+                        if d.get("category") == "receive" and d.get("address") == address:
+                            amount += Decimal(d.get("amount", 0))
+
+                    if amount <= 0:
+                        continue
+
+                    # Unconfirmed
+                    if confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
+                        self.add_to_balance_unconfirmed(snowflake, amount)
+                        self.add_deposit(snowflake, amount, txid, "UNCONFIRMED")
+                    else:  # Confirmed
+                        self.add_to_balance(snowflake, amount)
+                        self.add_deposit(snowflake, amount, txid, "CONFIRMED")
+
+            print("[RECOVERY] Complete")
 
         # -------------------- AIRDROPS --------------------
         def create_airdrop(

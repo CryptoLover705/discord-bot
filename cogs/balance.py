@@ -24,6 +24,10 @@ class Balance(commands.Cog):
                 return float(data["quotes"]["USD"]["price"])
 
     async def do_embed(self, user: discord.User, db_bal: float, db_bal_unconfirmed: float, price_usd: float) -> discord.Embed:
+        # Ensure balances are float
+        db_bal = float(db_bal)
+        db_bal_unconfirmed = float(db_bal_unconfirmed)
+
         usd_balance = db_bal * price_usd
         embed = discord.Embed(colour=0xff0000)
         embed.add_field(name="User", value=user.mention)
@@ -47,9 +51,9 @@ class Balance(commands.Cog):
         # Ensure user exists in DB
         mysql.check_for_user(snowflake)
 
-        # Fetch balances
-        balance = mysql.get_balance(snowflake, check_update=True)
-        balance_unconfirmed = mysql.get_balance(snowflake, check_unconfirmed=True)
+        # Fetch balances and cast to float to avoid Decimal * float errors
+        balance = float(mysql.get_balance(snowflake, check_update=True))
+        balance_unconfirmed = float(mysql.get_balance(snowflake, check_unconfirmed=True))
 
         # Fetch USD price
         price_usd = await self.fetch_price_usd()

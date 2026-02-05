@@ -212,6 +212,10 @@ async def on_ready():
 
     print("✅ Deposit notifications enabled")
 
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    mysql.recover_missed_deposits()
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
