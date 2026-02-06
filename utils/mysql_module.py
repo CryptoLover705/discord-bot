@@ -364,6 +364,29 @@ class Mysql:
                 deposits = cursor.fetchall()
             # convert amounts to Decimal
             return [{"amount": Decimal(d["amount"]), "txid": d["txid"]} for d in deposits]
+        
+        def get_deposit_history(self, snowflake: int, limit: int = 10):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT amount, txid, status
+                    FROM deposit
+                    WHERE snowflake_fk = %s
+                    ORDER BY id DESC
+                    LIMIT %s
+                    """,
+                    (str(snowflake), limit)
+                )
+                rows = cursor.fetchall()
+
+            return [
+                {
+                    "amount": Decimal(r["amount"]),
+                    "txid": r["txid"],
+                    "status": r["status"]
+                }
+                for r in rows
+            ]
 
         # -------------------- Deposit/Withdraw/Tip/Soak --------------------
         def add_deposit(self, snowflake: int, amount: Decimal, txid: str, status: str):
