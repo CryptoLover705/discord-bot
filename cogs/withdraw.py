@@ -3,6 +3,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from utils import rpc_module, mysql_module, parsing
+from decimal import Decimal
 
 rpc = rpc_module.Rpc()
 mysql = mysql_module.Mysql()
@@ -31,8 +32,7 @@ class Withdraw(commands.Cog):
             )
             return
 
-        abs_amount = abs(amount)
-        if math.log10(abs_amount) > 8:
+        if math.log10(abs(amount)) > 8:
             await interaction.response.send_message(
                 "⚠️ Invalid amount!", ephemeral=True
             )
@@ -50,9 +50,9 @@ class Withdraw(commands.Cog):
 
         # Prevent withdrawing to bot-owned addresses
         owned_by_bot = False
-        for address_info in rpc.listreceivedbyaddress(0, True):
-            if address_info["address"] == address:
-                owned_by_bot = False
+        for addr_info in rpc.listreceivedbyaddress(0, True):
+            if addr_info["address"] == address:
+                owned_by_bot = True
                 break
         if owned_by_bot:
             await interaction.response.send_message(
@@ -61,16 +61,24 @@ class Withdraw(commands.Cog):
             )
             return
 
-        # Check balance
-        balance = mysql.get_balance(snowflake, check_update=True)
-        if float(balance) < amount:
+        # Check balance and refresh deposits
+        balance = mysql.get_balance(snowflake, update=True)
+        if Decimal(balance) < Decimal(amount):
             await interaction.response.send_message(
                 f"{interaction.user.mention} ⚠️ You cannot withdraw more than your balance!", ephemeral=True
             )
             return
 
-        # Execute withdrawal
-        txid = mysql.create_withdrawal(snowflake, address, amount)
+        # Deduct from DB and send coins via RPC
+        txid = mysql.check_for_updated_balance(
+            snowflake,
+            send_to_address=address,
+            amount=Decimal(amount)
+        )
+
+        # Log withdrawal in DB
+        mysql.create_withdrawal(snowflake, address, amount)
+
         if txid is None:
             await interaction.response.send_message(
                 f"{interaction.user.mention} Withdrawal failed despite having the necessary balance! Please contact support.",
@@ -78,7 +86,6 @@ class Withdraw(commands.Cog):
             )
         else:
             explorer_url = f"https://miners-world-coin-mwc.github.io/explorer/#/transaction/{txid}"
-
             await interaction.response.send_message(
                 f"{interaction.user.mention} ✅ Withdrew **{amount} MWC** <:MWC:1451276940236423189>.\n"
                 f"Transaction ID: [{txid}]({explorer_url})",

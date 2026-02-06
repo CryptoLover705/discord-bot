@@ -34,7 +34,7 @@ class Soak(commands.Cog):
     async def soak(self, interaction: discord.Interaction, amount: float):
         snowflake = interaction.user.id
         mysql.check_for_user(snowflake)
-        balance = mysql.get_balance(snowflake, check_update=True)
+        balance = mysql.get_balance(snowflake, update=True)
 
         if float(balance) < amount:
             await interaction.response.send_message(

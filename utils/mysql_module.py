@@ -159,6 +159,21 @@ class Mysql:
                     (str(amount), str(snowflake))
                 )
 
+        # ---------- PUBLIC BALANCE ACCESS ----------
+        def get_balance(self, user_id: int, confirmed_only: bool = True, update: bool = False) -> Decimal:
+            """
+            Public balance accessor.
+            confirmed_only=True  -> confirmed balance only
+            confirmed_only=False -> confirmed + unconfirmed
+            update=True          -> refresh balance from wallet before returning
+            """
+            if update:
+                self.check_for_updated_balance(user_id)
+
+            if confirmed_only:
+                return self._Mysql__get_balance(user_id, check_unconfirmed=False)
+            return self._Mysql__get_balance(user_id, check_unconfirmed=True)
+
         def get_confirmed_balance(self, snowflake: int) -> Decimal:
             with self.__setup_cursor() as cursor:
                 cursor.execute(
@@ -190,6 +205,27 @@ class Mysql:
                     "UPDATE users SET balance = balance - %s WHERE snowflake_pk = %s",
                     (str(amount), str(snowflake))
                 )
+
+        # ---------- NEW HELPER FOR BALANCE UPDATES & WITHDRAW ----------
+        def check_for_updated_balance(self, snowflake: int, send_to_address: str = None, amount: Decimal = None):
+            """
+            Fetch recent deposits from the wallet and update the user's balance in the DB.
+            If send_to_address and amount are provided, also send coins via RPC.
+            """
+            # 1️⃣ Sync new deposits first
+            deposits = self.list_deposits_for_user(snowflake)
+            total_new = sum(d["amount"] for d in deposits)
+            if total_new > 0:
+                self.add_to_balance(snowflake, Decimal(total_new))
+
+            # 2️⃣ If withdrawing, deduct balance and send via RPC
+            if send_to_address and amount:
+                # Deduct from DB
+                self.remove_from_balance(snowflake, amount)
+
+                # Send via RPC
+                txid = rpc.sendtoaddress(str(send_to_address), float(amount))
+                return txid
 
         def add_to_balance_unconfirmed(self, snowflake: int, amount: Decimal):
             with self.__setup_cursor() as cursor:
@@ -307,21 +343,6 @@ class Mysql:
                 cursor.execute("SELECT status FROM deposit WHERE txid = %s", (txid,))
                 result = cursor.fetchone()
             return result["status"] if result else "DOESNT_EXIST"
-        
-        # ---------- PUBLIC BALANCE ACCESS (FIX NAME MANGLING) ----------
-        def get_balance(self, user_id: int, confirmed_only: bool = True, check_update: bool = False) -> Decimal:
-            """
-            Public balance accessor.
-            confirmed_only=True  -> confirmed balance only
-            confirmed_only=False -> confirmed + unconfirmed
-            check_update=True     -> refresh balance from wallet before returning
-            """
-            if check_update:
-                self.update_balance(user_id)  # <-- implement this if you want automatic update
-            
-            if confirmed_only:
-                return self._Mysql__get_balance(user_id, check_unconfirmed=False)
-            return self._Mysql__get_balance(user_id, check_unconfirmed=True)
 
         # -------------------- Deposit/Withdraw/Tip/Soak --------------------
         def add_deposit(self, snowflake: int, amount: Decimal, txid: str, status: str):
