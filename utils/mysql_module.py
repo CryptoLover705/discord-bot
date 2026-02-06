@@ -472,6 +472,15 @@ class Mysql:
                 result = cursor.fetchone()
             return bool(result['allow_soak']) if result else False
         
+        def get_active_users(self, hours: int) -> list[int]:
+            query = """
+                SELECT DISTINCT user_id
+                FROM tips
+                WHERE timestamp >= NOW() - INTERVAL %s HOUR
+            """
+            self.cursor.execute(query, (hours,))
+            return [row[0] for row in self.cursor.fetchall()]
+
         def recover_missed_deposits(self):
             print("[RECOVERY] Scanning for missed deposits...")
 
