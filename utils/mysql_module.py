@@ -170,9 +170,10 @@ class Mysql:
             if update:
                 self.check_for_updated_balance(user_id)
 
+            # ✅ FIX: replaced call to non-existent __get_balance with our own helpers
             if confirmed_only:
-                return self._Mysql__get_balance(user_id, check_unconfirmed=False)
-            return self._Mysql__get_balance(user_id, check_unconfirmed=True)
+                return self.get_confirmed_balance(user_id)
+            return self.get_unconfirmed_balance(user_id)
 
         def get_confirmed_balance(self, snowflake: int) -> Decimal:
             with self.__setup_cursor() as cursor:
@@ -209,10 +210,9 @@ class Mysql:
         # ---------- NEW HELPER FOR BALANCE UPDATES & WITHDRAW ----------
         def check_for_updated_balance(self, snowflake: int, send_to_address: str = None, amount: Decimal = None):
             """
-            Fetch recent deposits from the wallet and update the user's balance in the DB.
-            If send_to_address and amount are provided, also send coins via RPC.
+            Sync new deposits from wallet. If send_to_address and amount are provided, also send coins.
             """
-            # 1️⃣ Sync new deposits first
+            # 1️⃣ Update deposits first
             deposits = self.list_deposits_for_user(snowflake)
             total_new = sum(d["amount"] for d in deposits)
             if total_new > 0:
@@ -220,10 +220,7 @@ class Mysql:
 
             # 2️⃣ If withdrawing, deduct balance and send via RPC
             if send_to_address and amount:
-                # Deduct from DB
                 self.remove_from_balance(snowflake, amount)
-
-                # Send via RPC
                 txid = rpc.sendtoaddress(str(send_to_address), float(amount))
                 return txid
 
@@ -252,7 +249,7 @@ class Mysql:
             """
             await asyncio.to_thread(self.check_for_updated_balance)
 
-        def check_for_updated_balance(self):
+        def check_for_updated_balance(self, snowflake: int = None, send_to_address: str = None, amount: Decimal = None):
             """
             Scan wallet using listreceivedbyaddress and update balances.
             Handles:
@@ -260,7 +257,17 @@ class Mysql:
             - Multi-output transactions
             - Auto-confirmation
             - Calls deposit_callback when new deposits are found
+            - Optional withdrawal if snowflake, send_to_address, and amount are provided
             """
+
+            # --- Handle a single user's deposits if snowflake provided ---
+            if snowflake is not None:
+                deposits = self.list_deposits_for_user(snowflake)
+                total_new = sum(d["amount"] for d in deposits)
+                if total_new > 0:
+                    self.add_to_balance(snowflake, Decimal(total_new))
+
+            # --- Full scan for all users (background deposit processing) ---
             # Fetch all users from DB
             with self.__setup_cursor() as cursor:
                 cursor.execute("SELECT snowflake_pk, address FROM users")
@@ -305,44 +312,58 @@ class Mysql:
                     confirmations = tx.get("confirmations", 0)
 
                     # Sum amounts for this address (multi-output TX)
-                    amount = Decimal("0")
+                    tx_amount = Decimal("0")
                     for detail in tx.get("details", []):
                         if detail.get("category") == "receive" and detail.get("address") == address:
-                            amount += Decimal(detail.get("amount", 0))
+                            tx_amount += Decimal(detail.get("amount", 0))
 
-                    if amount <= 0:
+                    if tx_amount <= 0:
                         continue
 
                     # 🟡 New unconfirmed deposit
                     if status == "DOESNT_EXIST" and confirmations < MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                        self.add_deposit(snowflake, amount, txid, "UNCONFIRMED")
-                        self.add_to_balance_unconfirmed(snowflake, amount)
+                        self.add_deposit(snowflake, tx_amount, txid, "UNCONFIRMED")
+                        self.add_to_balance_unconfirmed(snowflake, tx_amount)
                         if self.deposit_callback:
-                            self.deposit_callback(snowflake, amount, txid, False)
+                            self.deposit_callback(snowflake, tx_amount, txid, False)
 
                     # 🟢 New confirmed deposit
                     elif status == "DOESNT_EXIST" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
-                        self.add_deposit(snowflake, amount, txid, "CONFIRMED")
-                        self.add_to_balance(snowflake, amount)
+                        self.add_deposit(snowflake, tx_amount, txid, "CONFIRMED")
+                        self.add_to_balance(snowflake, tx_amount)
                         if self.deposit_callback:
-                            self.deposit_callback(snowflake, amount, txid, True)
+                            self.deposit_callback(snowflake, tx_amount, txid, True)
 
                     # 🔁 Previously unconfirmed, now confirmed
                     elif status == "UNCONFIRMED" and confirmations >= MIN_CONFIRMATIONS_FOR_DEPOSIT:
                         self.confirm_deposit(txid)
 
                         # 🔄 MOVE funds from unconfirmed → confirmed
-                        self.remove_from_balance_unconfirmed(snowflake, amount)
-                        self.add_to_balance(snowflake, amount)
+                        self.remove_from_balance_unconfirmed(snowflake, tx_amount)
+                        self.add_to_balance(snowflake, tx_amount)
 
                         if self.deposit_callback:
-                            self.deposit_callback(snowflake, amount, txid, True)
+                            self.deposit_callback(snowflake, tx_amount, txid, True)
 
         def get_transaction_status_by_txid(self, txid: str) -> str:
             with self.__setup_cursor() as cursor:
                 cursor.execute("SELECT status FROM deposit WHERE txid = %s", (txid,))
                 result = cursor.fetchone()
             return result["status"] if result else "DOESNT_EXIST"
+
+        def list_deposits_for_user(self, snowflake: int):
+            """
+            Returns all unprocessed deposits for a specific user.
+            This is used by check_for_updated_balance() to refresh balances before withdrawal.
+            """
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    "SELECT amount, txid FROM deposit WHERE snowflake_fk = %s AND status != 'CONFIRMED'",
+                    (str(snowflake),)
+                )
+                deposits = cursor.fetchall()
+            # convert amounts to Decimal
+            return [{"amount": Decimal(d["amount"]), "txid": d["txid"]} for d in deposits]
 
         # -------------------- Deposit/Withdraw/Tip/Soak --------------------
         def add_deposit(self, snowflake: int, amount: Decimal, txid: str, status: str):
@@ -359,19 +380,16 @@ class Mysql:
         def create_withdrawal(self, snowflake: int, address: str, amount: Decimal) -> Optional[str]:
             amount = Decimal(amount)
 
-            # Confirmed balance only
             balance = self.get_balance(snowflake, confirmed_only=True)
-
-            if amount <= 0:
+            if amount <= 0 or balance < amount:
                 return None
 
-            if balance < amount:
-                return None  # insufficient funds
+            txfee_decimal = Decimal(str(self.txfee))
 
-            if not rpc.settxfee(self.txfee):
+            if not rpc.settxfee(float(txfee_decimal)):
                 return None
 
-            send_amount = amount - self.txfee
+            send_amount = amount - txfee_decimal
             if send_amount <= 0:
                 return None
 
@@ -380,7 +398,9 @@ class Mysql:
                 return None
 
             self.remove_from_balance(snowflake, amount)
-            return self.add_withdrawal(snowflake, amount, txid)
+            self.add_withdrawal(snowflake, amount, txid)
+
+            return txid
 
         def add_withdrawal(self, snowflake: int, amount: Decimal, txid: str) -> str:
             amount = Decimal(amount)
