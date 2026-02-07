@@ -1,5 +1,20 @@
 import re, json
 
+DURATION_MULTIPLIERS = {
+    "s": 1,
+    "m": 60,
+    "h": 3600,
+    "d": 86400,
+}
+
+def parse_duration(input: str) -> int:
+    match = re.fullmatch(r"(\d+)([smhd])", input.lower())
+    if not match:
+        raise ValueError("Invalid duration format")
+
+    value, unit = match.groups()
+    return int(value) * DURATION_MULTIPLIERS[unit]
+
 def parse_json(filename):
     """Remove //-- and /* -- */ style comments from JSON"""
     comment_re = re.compile(

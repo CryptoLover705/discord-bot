@@ -372,7 +372,6 @@ class Mysql:
                     SELECT amount, txid, status
                     FROM deposit
                     WHERE snowflake_fk = %s
-                    ORDER BY id DESC
                     LIMIT %s
                     """,
                     (str(snowflake), limit)
@@ -438,6 +437,27 @@ class Mysql:
                 )
 
             return txid
+        
+        def get_withdrawal_history(self, snowflake: int, limit: int = 10):
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT amount, txid
+                    FROM withdrawal
+                    WHERE snowflake_fk = %s
+                    LIMIT %s
+                    """,
+                    (str(snowflake), limit)
+                )
+                rows = cursor.fetchall()
+
+            return [
+                {
+                    "amount": Decimal(r["amount"]),
+                    "txid": r["txid"]
+                }
+                for r in rows
+            ]
 
         def add_tip(self, from_snowflake: int, to_snowflake: int, amount: Decimal):
             amount = Decimal(amount)
@@ -497,12 +517,14 @@ class Mysql:
         
         def get_active_users(self, hours: int) -> list[int]:
             query = """
-                SELECT DISTINCT user_id
-                FROM tips
-                WHERE timestamp >= NOW() - INTERVAL %s HOUR
+                SELECT DISTINCT snowflake_to_fk
+                FROM tip
+                WHERE created_at >= NOW() - INTERVAL %s HOUR
             """
-            self.cursor.execute(query, (hours,))
-            return [row[0] for row in self.cursor.fetchall()]
+            with self.__setup_cursor() as cursor:
+                cursor.execute(query, (hours,))
+                rows = cursor.fetchall()
+            return [r["snowflake_to_fk"] for r in rows]
 
         def recover_missed_deposits(self):
             print("[RECOVERY] Scanning for missed deposits...")
@@ -633,3 +655,18 @@ class Mysql:
                     """,
                     (int(airdrop_id),)
                 )
+
+        def fetch_airdrops_by_creator(self, creator_id: int, executed: bool = False):
+            """Return a list of airdrops for a creator, optionally filtered by execution status."""
+            with self.__setup_cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM airdrops
+                    WHERE creator_id = %s AND executed = %s
+                    ORDER BY execute_at ASC
+                    """,
+                    (int(creator_id), int(executed))
+                )
+                return cursor.fetchall()
+

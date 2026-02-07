@@ -27,7 +27,8 @@ airdrop_cfg = config.get("airdrop", {})
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True   # REQUIRED for airdrops
-intents.messages = False
+intents.presences = True
+intents.messages = True
 
 # =========================
 # BOT INITIALIZATION
@@ -35,7 +36,7 @@ intents.messages = False
 class MinerBot(commands.Bot):
     def __init__(self):
         super().__init__(
-            command_prefix=None,
+            command_prefix=["!", "?"],
             description=config["description"],
             intents=intents
         )

@@ -32,12 +32,23 @@ class Soak(commands.Cog):
         self.soak_min_received = soak_config["soak_min_received"]
         self.use_min_received = soak_config["use_min_received"]
 
+        # --- In-memory activity tracker for active soak ---
+        self.active_users: dict[int, float] = {}  # snowflake -> last seen timestamp
+
     async def fetch_price_usd(self) -> float:
         url = f"https://api.coinpaprika.com/v1/tickers/{COINPAPRIKA_ID}"
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 data = await resp.json()
                 return float(data["quotes"]["USD"]["price"])
+
+    # =========================
+    # MESSAGE SPLITTER
+    # =========================
+    async def send_long_message(self, channel, content, **kwargs):
+        # Discord max message length is 2000 chars
+        for i in range(0, len(content), 2000):
+            await channel.send(content[i:i+2000], **kwargs)
 
     # =========================
     # SOAK COMMAND
@@ -48,7 +59,7 @@ class Soak(commands.Cog):
         type="Who should be soaked",
         amount="Total MWC amount to split",
         role="Role to soak (role type only)",
-        timeframe="Activity window like 24h or 72h (active type only)"
+        timeframe="Activity window like 10m, 1h, 24h (active type only)"
     )
     async def soak(
         self,
@@ -61,21 +72,20 @@ class Soak(commands.Cog):
         sender = interaction.user
         snowflake = sender.id
 
+        # ------------------------
+        # DEFER TO AVOID TIMEOUT
+        # ------------------------
+        await interaction.response.defer(ephemeral=False)
+
         mysql.check_for_user(snowflake)
         balance = mysql.get_balance(snowflake, update=True)
 
         if amount <= 0:
-            await interaction.response.send_message(
-                f"{sender.mention} ⚠️ Amount must be greater than 0!",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"{sender.mention} ⚠️ Amount must be greater than 0!", ephemeral=True)
             return
 
         if balance < amount:
-            await interaction.response.send_message(
-                f"{sender.mention} ⚠️ Insufficient balance!",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"{sender.mention} ⚠️ Insufficient balance!", ephemeral=True)
             return
 
         recipients: list[discord.Member] = []
@@ -86,10 +96,7 @@ class Soak(commands.Cog):
         if type == SoakType.online:
             recipients = [
                 m for m in interaction.guild.members
-                if m.status == discord.Status.online
-                and not m.bot
-                and m.id != snowflake
-                and mysql.check_soakme(m.id)
+                if not m.bot and m.id != snowflake and m.status != discord.Status.offline
             ]
 
         # =========================
@@ -97,47 +104,58 @@ class Soak(commands.Cog):
         # =========================
         elif type == SoakType.role:
             if not role:
-                await interaction.response.send_message(
-                    "⚠️ You must specify a role for role soak!",
-                    ephemeral=True
-                )
+                await interaction.followup.send("⚠️ You must specify a role for role soak!", ephemeral=True)
                 return
-
             recipients = [
                 m for m in role.members
-                if not m.bot
-                and m.id != snowflake
-                and mysql.check_soakme(m.id)
+                if not m.bot and m.id != snowflake
             ]
 
         # =========================
-        # ACTIVE SOAK
+        # ACTIVE SOAK (since bot startup)
         # =========================
         elif type == SoakType.active:
-            if not timeframe or not timeframe.endswith("h"):
-                await interaction.response.send_message(
-                    "⚠️ Timeframe must look like `24h` or `72h`",
+            if not timeframe:
+                await interaction.followup.send(
+                    "⚠️ You must provide a timeframe like `10m`, `1h`, or `24h`",
                     ephemeral=True
                 )
                 return
 
-            hours = int(timeframe.replace("h", ""))
-            active_ids = mysql.get_active_users(hours)
+            try:
+                duration_seconds = parsing.parse_duration(timeframe)
+            except ValueError:
+                await interaction.followup.send(
+                    "⚠️ Invalid timeframe format.\nUse `30s`, `1m`, `10m`, `1h`, `24h`, `7d`",
+                    ephemeral=True
+                )
+                return
+
+            # Optional safety limits
+            if duration_seconds < 60 or duration_seconds > 86400:
+                await interaction.followup.send(
+                    "⚠️ Timeframe must be between **1 minute and 24 hours**",
+                    ephemeral=True
+                )
+                return
+
+            cutoff = discord.utils.utcnow().timestamp() - duration_seconds
+
+            active_ids = [
+                uid for uid, ts in self.active_users.items()
+                if ts >= cutoff
+            ]
 
             for uid in active_ids:
                 member = interaction.guild.get_member(uid)
                 if member and not member.bot and member.id != snowflake:
-                    if mysql.check_soakme(member.id):
-                        recipients.append(member)
+                    recipients.append(member)
 
         # =========================
         # VALIDATION
         # =========================
         if not recipients:
-            await interaction.response.send_message(
-                f"{sender.mention} ⚠️ No eligible users found!",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"{sender.mention} ⚠️ No eligible users found!", ephemeral=True)
             return
 
         if self.use_max_recipients:
@@ -146,19 +164,15 @@ class Soak(commands.Cog):
         count = len(recipients)
 
         if self.use_min_received and amount < self.soak_min_received:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"{sender.mention} ⚠️ Amount below minimum soak ({self.soak_min_received})",
                 ephemeral=True
             )
             return
 
         split_amount = math.floor(amount * 1e8 / count) / 1e8
-
         if split_amount <= 0:
-            await interaction.response.send_message(
-                f"{sender.mention} ⚠️ Amount too small to split!",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"{sender.mention} ⚠️ Amount too small to split!", ephemeral=True)
             return
 
         # =========================
@@ -171,16 +185,34 @@ class Soak(commands.Cog):
         price_usd = await self.fetch_price_usd()
         usd_each = split_amount * price_usd
 
-        mentions = ", ".join(m.mention for m in recipients[:10])
-        if len(recipients) > 10:
-            mentions += f" +{len(recipients) - 10} more"
+        # =========================
+        # BUILD MENTIONS WITH SPLIT MESSAGES
+        # =========================
+        chunk_size = 50
+        mentions_chunks = [
+            ", ".join(m.mention for m in recipients[i:i+chunk_size])
+            for i in range(0, len(recipients), chunk_size)
+        ]
 
-        await interaction.response.send_message(
+        # First chunk uses followup.send to resolve the defer
+        first_chunk = mentions_chunks.pop(0)
+        msg = (
             f"💦 {sender.mention} soaked **{count} users** ({type.value})\n"
             f"💰 **{split_amount:.8f} MWC each** (~${usd_each:,.6f})\n"
-            f"👥 {mentions}\n"
+            f"👥 {first_chunk}\n"
             f"📦 Total: **{amount:.8f} MWC**"
         )
+        await interaction.followup.send(msg)
+
+        # Remaining chunks sent normally
+        for chunk in mentions_chunks:
+            extra_msg = (
+                f"💦 {sender.mention} soaked **{count} users** ({type.value})\n"
+                f"💰 **{split_amount:.8f} MWC each** (~${usd_each:,.6f})\n"
+                f"👥 {chunk}\n"
+                f"📦 Total: **{amount:.8f} MWC**"
+            )
+            await self.send_long_message(interaction.channel, extra_msg)
 
     # =========================
     # SOAK INFO
@@ -208,6 +240,15 @@ class Soak(commands.Cog):
         await interaction.response.send_message(
             "✅ You will be soaked!" if enable else "❌ You will no longer be soaked!"
         )
+
+    # =========================
+    # MESSAGE ACTIVITY HOOK
+    # =========================
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+        self.active_users[message.author.id] = message.created_at.timestamp()
 
 
 async def setup(bot: commands.Bot):
